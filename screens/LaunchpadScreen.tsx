@@ -1,71 +1,312 @@
-import React, { useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Image } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import {
+  View,
+  Text,
+  ScrollView,
+  TouchableOpacity,
+  Image,
+  Alert,
+  ActivityIndicator,
+  TextInput,
+  Modal,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { FadeInUp, FadeInRight, BounceIn } from 'react-native-reanimated';
+import { Keypair, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// Import launchpad services
+import { intentFiMobile, networkService, walletService } from '../services';
+
+interface LaunchData {
+  creator: string;
+  tokenMint: string;
+  tokenName: string;
+  tokenSymbol: string;
+  tokenUri: string;
+  softCap: number;
+  hardCap: number;
+  tokenPrice: number;
+  tokensForSale: number;
+  minContribution: number;
+  maxContribution: number;
+  launchStart: number;
+  launchEnd: number;
+  totalRaised: number;
+  totalContributors: number;
+  tokensSold: number;
+  status: 'Active' | 'Successful' | 'Failed';
+}
 
 export function LaunchpadScreen() {
   const [selectedCategory, setSelectedCategory] = useState('All');
+  const [isInitialized, setIsInitialized] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [userKeypair, setUserKeypair] = useState<Keypair | null>(null);
+  const [launchpadState, setLaunchpadState] = useState<any>(null);
+  const [activeLaunches, setActiveLaunches] = useState<LaunchData[]>([]);
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showContributeModal, setShowContributeModal] = useState(false);
+  const [selectedLaunch, setSelectedLaunch] = useState<LaunchData | null>(null);
 
-  const categories = ['All', 'DeFi', 'NFT', 'Gaming', 'Infrastructure'];
+  // Create launch form
+  const [launchForm, setLaunchForm] = useState({
+    tokenName: '',
+    tokenSymbol: '',
+    tokenUri: '',
+    decimals: 9,
+    softCap: '',
+    hardCap: '',
+    tokenPrice: '',
+    tokensForSale: '',
+    minContribution: '',
+    maxContribution: '',
+    launchDuration: '7', // days
+  });
 
-  const featuredProjects = [
+  // Contribute form
+  const [contributeAmount, setContributeAmount] = useState('');
+
+  const categories = ['All', 'DeFi', 'Gaming', 'Infrastructure', 'Meme'];
+
+  useEffect(() => {
+    initializeLaunchpad();
+  }, []);
+
+  const initializeLaunchpad = async () => {
+    try {
+      setLoading(true);
+
+      // Initialize SDK for devnet
+      await intentFiMobile.initialize('devnet');
+      console.log('✅ Launchpad SDK initialized on devnet');
+
+      // Get or create a funded wallet seamlessly
+      const { publicKey: walletPublicKey, hasFunds } =
+        await intentFiMobile.getOrCreateFundedWallet();
+      console.log('👤 Launchpad wallet ready:', walletPublicKey.toString().slice(0, 8) + '...');
+
+      // Ensure wallet has minimum funds for operations
+      if (!hasFunds) {
+        console.log('💧 Ensuring launchpad wallet is funded...');
+        const fundingResult = await intentFiMobile.ensureWalletFunded(walletPublicKey, 0.1);
+        if (!fundingResult) {
+          console.warn('⚠️ Wallet funding failed - some launchpad features may be limited');
+        }
+      }
+
+      // Create Keypair object for backward compatibility
+      const storedWallet = await AsyncStorage.getItem('secure_wallet_data');
+      if (storedWallet) {
+        const parsed = JSON.parse(storedWallet);
+        if (parsed.privateKey && Array.isArray(parsed.privateKey)) {
+          try {
+            const secretKeyArray = new Uint8Array(parsed.privateKey);
+            if (secretKeyArray.length === 64) {
+              const testKeypair = Keypair.fromSecretKey(secretKeyArray);
+              setUserKeypair(testKeypair);
+            } else {
+              console.error('Invalid secret key size in Launchpad:', secretKeyArray.length);
+            }
+          } catch (error) {
+            console.error('Failed to reconstruct keypair in Launchpad:', error);
+          }
+        }
+      }
+
+      setIsInitialized(true);
+
+      // Fetch launchpad state
+      await fetchLaunchpadData();
+    } catch (error) {
+      console.error('❌ Failed to initialize Launchpad:', error);
+      // Don't show error alert - allow user to continue with limited functionality
+      setIsInitialized(true);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchLaunchpadData = async () => {
+    try {
+      const state = await intentFiMobile.advancedSDK.launchpad.getLaunchpadState();
+      setLaunchpadState(state);
+
+      // For demo, we'll show some example launches
+      // In production, you'd fetch all launches from the blockchain
+      console.log('📊 Launchpad state:', state);
+    } catch (error) {
+      console.error('❌ Failed to fetch launchpad data:', error);
+    }
+  };
+
+  const createTokenLaunch = async () => {
+    if (!userKeypair) return;
+
+    // Validate form
+    if (!launchForm.tokenName || !launchForm.tokenSymbol || !launchForm.softCap) {
+      Alert.alert('Error', 'Please fill in all required fields');
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      const launchParams = {
+        tokenName: launchForm.tokenName,
+        tokenSymbol: launchForm.tokenSymbol,
+        tokenUri:
+          launchForm.tokenUri ||
+          `https://metadata.example.com/${launchForm.tokenSymbol.toLowerCase()}.json`,
+        decimals: parseInt(launchForm.decimals.toString()),
+        softCap: parseFloat(launchForm.softCap) * LAMPORTS_PER_SOL,
+        hardCap: parseFloat(launchForm.hardCap) * LAMPORTS_PER_SOL,
+        tokenPrice: parseFloat(launchForm.tokenPrice) * LAMPORTS_PER_SOL,
+        tokensForSale:
+          parseFloat(launchForm.tokensForSale) *
+          Math.pow(10, parseInt(launchForm.decimals.toString())),
+        minContribution: parseFloat(launchForm.minContribution) * LAMPORTS_PER_SOL,
+        maxContribution: parseFloat(launchForm.maxContribution) * LAMPORTS_PER_SOL,
+        launchDuration: parseInt(launchForm.launchDuration) * 24 * 3600, // convert days to seconds
+      };
+
+      // Create complete launch (mint + launch)
+      const launch = await intentFiMobile.createCompleteLaunch(userKeypair, launchParams);
+
+      console.log('✅ Launch created:', launch);
+      Alert.alert(
+        'Launch Created!',
+        `Token: ${launch.tokenMint.toString().slice(0, 20)}...\nLaunch: ${launch.launchSignature.slice(0, 20)}...`
+      );
+
+      setShowCreateModal(false);
+      resetCreateForm();
+      await fetchLaunchpadData();
+    } catch (error: any) {
+      console.error('❌ Launch creation failed:', error);
+      Alert.alert('Error', error.message || 'Failed to create launch');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const contributeToLaunch = async () => {
+    if (!userKeypair || !selectedLaunch || !contributeAmount) return;
+
+    try {
+      setLoading(true);
+
+      const amount = parseFloat(contributeAmount) * LAMPORTS_PER_SOL;
+      const creatorPubkey = new PublicKey(selectedLaunch.creator);
+
+      const signature = await intentFiMobile.contributeToLaunch(userKeypair, creatorPubkey, amount);
+
+      console.log('✅ Contribution made:', signature);
+      Alert.alert(
+        'Contribution Successful!',
+        `Contributed ${contributeAmount} SOL\nSignature: ${signature.slice(0, 20)}...`
+      );
+
+      setShowContributeModal(false);
+      setContributeAmount('');
+      await fetchLaunchpadData();
+    } catch (error: any) {
+      console.error('❌ Contribution failed:', error);
+      Alert.alert('Error', error.message || 'Failed to contribute');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const resetCreateForm = () => {
+    setLaunchForm({
+      tokenName: '',
+      tokenSymbol: '',
+      tokenUri: '',
+      decimals: 9,
+      softCap: '',
+      hardCap: '',
+      tokenPrice: '',
+      tokensForSale: '',
+      minContribution: '',
+      maxContribution: '',
+      launchDuration: '7',
+    });
+  };
+
+  const formatSOL = (lamports: number) => {
+    return (lamports / LAMPORTS_PER_SOL).toFixed(2);
+  };
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'Active':
+        return '#F59E0B';
+      case 'Successful':
+        return '#10B981';
+      case 'Failed':
+        return '#EF4444';
+      default:
+        return '#8E8E93';
+    }
+  };
+
+  const calculateProgress = (raised: number, target: number) => {
+    return Math.min((raised / target) * 100, 100);
+  };
+
+  // Example launches for demonstration (in production, fetch from blockchain)
+  const exampleLaunches: LaunchData[] = [
     {
-      id: 1,
-      name: 'SolanaFi Pro',
-      symbol: 'SOLFIPRO',
-      description: 'Next-gen yield aggregation protocol',
-      raised: '$2.4M',
-      target: '$5M',
-      progress: 48,
-      rugScore: 95,
-      participants: 1420,
-      timeLeft: '5d 12h',
-      category: 'DeFi',
-      verified: true,
+      creator: userKeypair?.publicKey.toString() || '',
+      tokenMint: 'SampleMint123456789',
+      tokenName: 'DeFi Protocol Token',
+      tokenSymbol: 'DPT',
+      tokenUri: 'https://metadata.example.com/dpt.json',
+      softCap: 50 * LAMPORTS_PER_SOL,
+      hardCap: 200 * LAMPORTS_PER_SOL,
+      tokenPrice: 0.01 * LAMPORTS_PER_SOL,
+      tokensForSale: 1000000,
+      minContribution: 0.1 * LAMPORTS_PER_SOL,
+      maxContribution: 10 * LAMPORTS_PER_SOL,
+      launchStart: Date.now() / 1000,
+      launchEnd: Date.now() / 1000 + 7 * 24 * 3600,
+      totalRaised: 75 * LAMPORTS_PER_SOL,
+      totalContributors: 42,
+      tokensSold: 750000,
+      status: 'Active',
     },
     {
-      id: 2,
-      name: 'MetaVerse World',
-      symbol: 'METAV',
-      description: 'Immersive gaming ecosystem on Solana',
-      raised: '$890K',
-      target: '$2M',
-      progress: 44,
-      rugScore: 88,
-      participants: 856,
-      timeLeft: '12d 8h',
-      category: 'Gaming',
-      verified: true,
-    },
-    {
-      id: 3,
-      name: 'QuickSwap V3',
-      symbol: 'QSWAP3',
-      description: 'Revolutionary DEX with AI routing',
-      raised: '$1.8M',
-      target: '$3.5M',
-      progress: 51,
-      rugScore: 92,
-      participants: 2134,
-      timeLeft: '3d 15h',
-      category: 'DeFi',
-      verified: true,
+      creator: 'Example2Creator123456789',
+      tokenMint: 'SampleMint987654321',
+      tokenName: 'Gaming Universe',
+      tokenSymbol: 'GAME',
+      tokenUri: 'https://metadata.example.com/game.json',
+      softCap: 30 * LAMPORTS_PER_SOL,
+      hardCap: 150 * LAMPORTS_PER_SOL,
+      tokenPrice: 0.005 * LAMPORTS_PER_SOL,
+      tokensForSale: 2000000,
+      minContribution: 0.05 * LAMPORTS_PER_SOL,
+      maxContribution: 5 * LAMPORTS_PER_SOL,
+      launchStart: Date.now() / 1000,
+      launchEnd: Date.now() / 1000 + 5 * 24 * 3600,
+      totalRaised: 45 * LAMPORTS_PER_SOL,
+      totalContributors: 28,
+      tokensSold: 900000,
+      status: 'Active',
     },
   ];
 
-  const getRugScoreColor = (score: number) => {
-    if (score >= 90) return '#00D4AA';
-    if (score >= 70) return '#FFB800';
-    return '#FF4757';
-  };
-
-  const getRugScoreText = (score: number) => {
-    if (score >= 90) return 'Safe';
-    if (score >= 70) return 'Review';
-    return 'Danger';
-  };
+  if (!isInitialized) {
+    return (
+      <SafeAreaView className="bg-dark-bg flex-1 items-center justify-center">
+        <ActivityIndicator size="large" color="#FF4500" />
+        <Text className="mt-4 text-white">Initializing Launchpad...</Text>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView className="bg-dark-bg flex-1">
@@ -74,214 +315,381 @@ export function LaunchpadScreen() {
         entering={FadeInUp.duration(600)}
         className="flex-row items-center justify-between p-4">
         <View>
-          <Text className="text-2xl font-bold text-white">Launchpad</Text>
-          <Text className="text-dark-gray text-sm">Rugproof token launches</Text>
+          <Text className="text-2xl font-bold text-white">🚀 Launchpad</Text>
+          <Text className="text-sm text-gray-400">
+            📡 {networkService.getCurrentNetwork().toUpperCase()} • Contract: 5y2X9WML...
+          </Text>
         </View>
-        <TouchableOpacity className="p-2">
-          <Ionicons name="shield-checkmark-outline" size={24} color="#00D4AA" />
+        <TouchableOpacity
+          onPress={() => setShowCreateModal(true)}
+          className="bg-primary rounded-lg px-4 py-2"
+          disabled={loading}>
+          <Text className="font-semibold text-white">Create Launch</Text>
         </TouchableOpacity>
       </Animated.View>
 
-      {/* Stats Banner */}
-      <Animated.View entering={FadeInUp.duration(600).delay(100)} className="mx-4 mb-6">
-        <LinearGradient
-          colors={['#FF4500', '#FF6B35']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          className="rounded-2xl p-4">
-          <View className="flex-row items-center justify-between">
-            <View className="flex-1 items-center">
-              <Text className="text-lg font-bold text-white">$47.2M</Text>
-              <Text className="text-xs text-white/80">Total Raised</Text>
-            </View>
-            <View className="h-8 w-px bg-white/20" />
-            <View className="flex-1 items-center">
-              <Text className="text-lg font-bold text-white">156</Text>
-              <Text className="text-xs text-white/80">Active Projects</Text>
-            </View>
-            <View className="h-8 w-px bg-white/20" />
-            <View className="flex-1 items-center">
-              <Text className="text-lg font-bold text-white">98.2%</Text>
-              <Text className="text-xs text-white/80">Success Rate</Text>
+      {/* User Info */}
+      {userKeypair && (
+        <Animated.View entering={FadeInUp.duration(600).delay(50)} className="mx-4 mb-4">
+          <View className="bg-dark-card border-dark-border rounded-xl border p-4">
+            <View className="flex-row items-center justify-between">
+              <View>
+                <Text className="font-semibold text-white">Your Wallet</Text>
+                <Text className="font-mono text-xs text-gray-400">
+                  {userKeypair.publicKey.toString().slice(0, 20)}...
+                </Text>
+              </View>
+              <View className="items-end">
+                <Text className="text-primary font-semibold">✓ Connected</Text>
+                <Text className="text-xs text-gray-400">Devnet Ready</Text>
+              </View>
             </View>
           </View>
-        </LinearGradient>
-      </Animated.View>
+        </Animated.View>
+      )}
+
+      {/* Platform Stats */}
+      {launchpadState && (
+        <Animated.View entering={FadeInUp.duration(600).delay(100)} className="mx-4 mb-6">
+          <View className="bg-dark-card border-dark-border rounded-xl border p-4">
+            <Text className="mb-3 font-semibold text-white">Platform Statistics</Text>
+            <View className="flex-row justify-between">
+              <View className="items-center">
+                <Text className="text-primary text-lg font-bold">
+                  {launchpadState.totalLaunches || 0}
+                </Text>
+                <Text className="text-xs text-gray-400">Total Launches</Text>
+              </View>
+              <View className="items-center">
+                <Text className="text-primary text-lg font-bold">
+                  {formatSOL(launchpadState.totalRaised || 0)} SOL
+                </Text>
+                <Text className="text-xs text-gray-400">Total Raised</Text>
+              </View>
+              <View className="items-center">
+                <Text className="text-primary text-lg font-bold">
+                  {launchpadState.platformFeeBps / 100 || 0}%
+                </Text>
+                <Text className="text-xs text-gray-400">Platform Fee</Text>
+              </View>
+            </View>
+          </View>
+        </Animated.View>
+      )}
 
       {/* Category Filter */}
       <Animated.View entering={FadeInRight.duration(600).delay(200)} className="mb-6 px-4">
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          <View className="flex-row space-x-3">
-            {categories.map((category) => (
-              <TouchableOpacity
-                key={category}
-                onPress={() => setSelectedCategory(category)}
-                className={`rounded-full border px-4 py-2 ${
-                  selectedCategory === category
-                    ? 'bg-primary border-primary'
-                    : 'bg-dark-card border-dark-border'
+          {categories.map((category) => (
+            <TouchableOpacity
+              key={category}
+              onPress={() => setSelectedCategory(category)}
+              className={`mr-3 rounded-full px-4 py-2 ${
+                selectedCategory === category
+                  ? 'bg-primary'
+                  : 'bg-dark-card border-dark-border border'
+              }`}>
+              <Text
+                className={`font-semibold ${
+                  selectedCategory === category ? 'text-white' : 'text-gray-400'
                 }`}>
-                <Text
-                  className={`font-medium ${
-                    selectedCategory === category ? 'text-white' : 'text-dark-gray'
-                  }`}>
-                  {category}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
+                {category}
+              </Text>
+            </TouchableOpacity>
+          ))}
         </ScrollView>
       </Animated.View>
 
-      <ScrollView className="flex-1 px-4" showsVerticalScrollIndicator={false}>
-        {/* Featured Projects */}
-        <Animated.View entering={FadeInUp.duration(600).delay(300)} className="mb-6">
-          <View className="mb-4 flex-row items-center justify-between">
-            <Text className="text-lg font-semibold text-white">Featured Projects</Text>
-            <TouchableOpacity>
-              <Text className="text-primary text-sm">View All</Text>
-            </TouchableOpacity>
-          </View>
+      {/* Active Launches */}
+      <ScrollView className="flex-1 px-4">
+        <Text className="mb-4 text-xl font-bold text-white">
+          Active Launches ({exampleLaunches.length})
+        </Text>
 
-          {featuredProjects.map((project, index) => (
+        {exampleLaunches.length === 0 ? (
+          <View className="bg-dark-card border-dark-border items-center rounded-xl border p-8">
+            <Ionicons name="rocket-outline" size={48} color="#8E8E93" />
+            <Text className="mt-4 text-center text-gray-400">
+              No active launches yet. Be the first to create one!
+            </Text>
+          </View>
+        ) : (
+          exampleLaunches.map((launch, index) => (
             <Animated.View
-              key={project.id}
+              key={index}
               entering={BounceIn.duration(600).delay(index * 100)}
               className="mb-4">
-              <TouchableOpacity className="bg-dark-card border-dark-border rounded-2xl border p-5">
-                {/* Project Header */}
+              <View className="bg-dark-card border-dark-border rounded-xl border p-6">
                 <View className="mb-4 flex-row items-start justify-between">
                   <View className="flex-1">
                     <View className="mb-2 flex-row items-center">
-                      <View className="bg-primary/20 mr-3 h-10 w-10 items-center justify-center rounded-full">
-                        <Text className="text-primary text-sm font-bold">
-                          {project.symbol.slice(0, 2)}
-                        </Text>
-                      </View>
-                      <View className="flex-1">
-                        <View className="flex-row items-center">
-                          <Text className="text-base font-bold text-white">{project.name}</Text>
-                          {project.verified && (
-                            <Ionicons
-                              name="checkmark-circle"
-                              size={16}
-                              color="#00D4AA"
-                              style={{ marginLeft: 6 }}
-                            />
-                          )}
-                        </View>
-                        <Text className="text-dark-gray text-sm">${project.symbol}</Text>
-                      </View>
+                      <Text className="mr-2 text-lg font-bold text-white">{launch.tokenName}</Text>
+                      <Text className="text-primary font-semibold">${launch.tokenSymbol}</Text>
                     </View>
-                    <Text className="text-dark-gray mb-3 text-sm">{project.description}</Text>
+                    <Text className="mb-2 text-sm text-gray-400">
+                      Creator: {launch.creator.slice(0, 20)}...
+                    </Text>
+                    <Text className="text-sm text-gray-400">
+                      Token Mint: {launch.tokenMint.slice(0, 20)}...
+                    </Text>
                   </View>
-
-                  {/* Rug Score Badge */}
                   <View
                     className="rounded-full px-3 py-1"
-                    style={{ backgroundColor: `${getRugScoreColor(project.rugScore)}20` }}>
+                    style={{ backgroundColor: getStatusColor(launch.status) + '20' }}>
                     <Text
-                      className="text-xs font-bold"
-                      style={{ color: getRugScoreColor(project.rugScore) }}>
-                      {getRugScoreText(project.rugScore)} {project.rugScore}
+                      className="text-xs font-semibold"
+                      style={{ color: getStatusColor(launch.status) }}>
+                      {launch.status}
                     </Text>
                   </View>
                 </View>
 
-                {/* Progress Bar */}
+                {/* Progress */}
                 <View className="mb-4">
-                  <View className="mb-2 flex-row items-center justify-between">
-                    <Text className="text-dark-gray text-sm">Progress</Text>
-                    <Text className="text-sm font-medium text-white">{project.progress}%</Text>
+                  <View className="mb-2 flex-row justify-between">
+                    <Text className="font-semibold text-white">
+                      {formatSOL(launch.totalRaised)} SOL raised
+                    </Text>
+                    <Text className="text-gray-400">{formatSOL(launch.hardCap)} SOL goal</Text>
                   </View>
-                  <View className="bg-dark-bg h-2 overflow-hidden rounded-full">
+                  <View className="h-2 overflow-hidden rounded-full bg-gray-700">
                     <View
                       className="bg-primary h-full rounded-full"
-                      style={{ width: `${project.progress}%` }}
+                      style={{ width: `${calculateProgress(launch.totalRaised, launch.hardCap)}%` }}
                     />
                   </View>
+                  <Text className="mt-1 text-xs text-gray-400">
+                    {calculateProgress(launch.totalRaised, launch.hardCap).toFixed(1)}% complete
+                  </Text>
                 </View>
 
-                {/* Stats Row */}
-                <View className="mb-4 flex-row items-center justify-between">
-                  <View className="flex-row items-center">
-                    <Text className="text-primary text-base font-bold">{project.raised}</Text>
-                    <Text className="text-dark-gray ml-1 text-sm">raised</Text>
+                {/* Stats */}
+                <View className="mb-4 flex-row justify-between">
+                  <View className="items-center">
+                    <Text className="font-semibold text-white">{launch.totalContributors}</Text>
+                    <Text className="text-xs text-gray-400">Contributors</Text>
                   </View>
-                  <View className="flex-row items-center">
-                    <Ionicons name="people" size={14} color="#8E8E93" />
-                    <Text className="text-dark-gray ml-1 text-sm">{project.participants}</Text>
+                  <View className="items-center">
+                    <Text className="font-semibold text-white">
+                      {formatSOL(launch.tokenPrice)} SOL
+                    </Text>
+                    <Text className="text-xs text-gray-400">Price/Token</Text>
                   </View>
-                  <View className="flex-row items-center">
-                    <Ionicons name="time" size={14} color="#8E8E93" />
-                    <Text className="text-dark-gray ml-1 text-sm">{project.timeLeft}</Text>
+                  <View className="items-center">
+                    <Text className="font-semibold text-white">
+                      {formatSOL(launch.minContribution)}-{formatSOL(launch.maxContribution)}
+                    </Text>
+                    <Text className="text-xs text-gray-400">SOL Range</Text>
                   </View>
                 </View>
 
                 {/* Action Button */}
-                <TouchableOpacity className="bg-primary rounded-xl py-3">
-                  <Text className="text-center font-semibold text-white">Participate Now</Text>
-                </TouchableOpacity>
-              </TouchableOpacity>
+                {launch.status === 'Active' && (
+                  <TouchableOpacity
+                    onPress={() => {
+                      setSelectedLaunch(launch);
+                      setShowContributeModal(true);
+                    }}
+                    className="bg-primary rounded-lg py-3"
+                    disabled={loading}>
+                    <Text className="text-center font-semibold text-white">
+                      Contribute to Launch
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
             </Animated.View>
-          ))}
-        </Animated.View>
-
-        {/* Rugproof Features */}
-        <Animated.View entering={FadeInUp.duration(600).delay(400)} className="mb-6">
-          <Text className="mb-4 text-lg font-semibold text-white">Rugproof Security</Text>
-          <View className="bg-dark-card border-dark-border rounded-2xl border p-5">
-            <View className="mb-4 flex-row items-center">
-              <View className="bg-success/20 mr-4 h-12 w-12 items-center justify-center rounded-full">
-                <Ionicons name="shield-checkmark" size={24} color="#00D4AA" />
-              </View>
-              <View className="flex-1">
-                <Text className="text-base font-bold text-white">Protected Launches</Text>
-                <Text className="text-dark-gray text-sm">
-                  Every project undergoes comprehensive security audits
-                </Text>
-              </View>
-            </View>
-
-            <View className="space-y-3">
-              <View className="flex-row items-center">
-                <Ionicons name="checkmark-circle" size={16} color="#00D4AA" />
-                <Text className="text-dark-gray ml-3 text-sm">
-                  Smart contract security analysis
-                </Text>
-              </View>
-              <View className="flex-row items-center">
-                <Ionicons name="checkmark-circle" size={16} color="#00D4AA" />
-                <Text className="text-dark-gray ml-3 text-sm">Team KYC verification</Text>
-              </View>
-              <View className="flex-row items-center">
-                <Ionicons name="checkmark-circle" size={16} color="#00D4AA" />
-                <Text className="text-dark-gray ml-3 text-sm">Token distribution transparency</Text>
-              </View>
-              <View className="flex-row items-center">
-                <Ionicons name="checkmark-circle" size={16} color="#00D4AA" />
-                <Text className="text-dark-gray ml-3 text-sm">Liquidity lock guarantees</Text>
-              </View>
-            </View>
-          </View>
-        </Animated.View>
-
-        {/* Launch Your Project */}
-        <Animated.View entering={FadeInUp.duration(600).delay(500)} className="mb-8">
-          <TouchableOpacity className="bg-dark-card border-primary/50 rounded-2xl border-2 border-dashed p-6">
-            <View className="items-center">
-              <Ionicons name="rocket" size={48} color="#FF4500" />
-              <Text className="mt-3 text-xl font-bold text-white">Launch Your Project</Text>
-              <Text className="text-dark-gray mt-2 text-center text-sm">
-                Start your rugproof token launch with comprehensive security features
-              </Text>
-              <View className="bg-primary mt-4 rounded-xl px-6 py-3">
-                <Text className="font-semibold text-white">Get Started</Text>
-              </View>
-            </View>
-          </TouchableOpacity>
-        </Animated.View>
+          ))
+        )}
       </ScrollView>
+
+      {/* Create Launch Modal */}
+      <Modal visible={showCreateModal} animationType="slide" presentationStyle="pageSheet">
+        <SafeAreaView className="bg-dark-bg flex-1">
+          <View className="border-dark-border flex-row items-center justify-between border-b p-4">
+            <Text className="text-xl font-bold text-white">Create Token Launch</Text>
+            <TouchableOpacity onPress={() => setShowCreateModal(false)}>
+              <Ionicons name="close" size={24} color="#8E8E93" />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView className="flex-1 p-4">
+            <View className="space-y-4">
+              <View>
+                <Text className="mb-2 font-semibold text-white">Token Name *</Text>
+                <TextInput
+                  className="bg-dark-card border-dark-border rounded-lg border p-3 text-white"
+                  placeholder="e.g., My Awesome Token"
+                  placeholderTextColor="#8E8E93"
+                  value={launchForm.tokenName}
+                  onChangeText={(text) => setLaunchForm({ ...launchForm, tokenName: text })}
+                />
+              </View>
+
+              <View>
+                <Text className="mb-2 font-semibold text-white">Token Symbol *</Text>
+                <TextInput
+                  className="bg-dark-card border-dark-border rounded-lg border p-3 text-white"
+                  placeholder="e.g., MAT"
+                  placeholderTextColor="#8E8E93"
+                  value={launchForm.tokenSymbol}
+                  onChangeText={(text) =>
+                    setLaunchForm({ ...launchForm, tokenSymbol: text.toUpperCase() })
+                  }
+                />
+              </View>
+
+              <View>
+                <Text className="mb-2 font-semibold text-white">Soft Cap (SOL) *</Text>
+                <TextInput
+                  className="bg-dark-card border-dark-border rounded-lg border p-3 text-white"
+                  placeholder="e.g., 10"
+                  placeholderTextColor="#8E8E93"
+                  keyboardType="numeric"
+                  value={launchForm.softCap}
+                  onChangeText={(text) => setLaunchForm({ ...launchForm, softCap: text })}
+                />
+              </View>
+
+              <View>
+                <Text className="mb-2 font-semibold text-white">Hard Cap (SOL) *</Text>
+                <TextInput
+                  className="bg-dark-card border-dark-border rounded-lg border p-3 text-white"
+                  placeholder="e.g., 100"
+                  placeholderTextColor="#8E8E93"
+                  keyboardType="numeric"
+                  value={launchForm.hardCap}
+                  onChangeText={(text) => setLaunchForm({ ...launchForm, hardCap: text })}
+                />
+              </View>
+
+              <View>
+                <Text className="mb-2 font-semibold text-white">Token Price (SOL) *</Text>
+                <TextInput
+                  className="bg-dark-card border-dark-border rounded-lg border p-3 text-white"
+                  placeholder="e.g., 0.01"
+                  placeholderTextColor="#8E8E93"
+                  keyboardType="numeric"
+                  value={launchForm.tokenPrice}
+                  onChangeText={(text) => setLaunchForm({ ...launchForm, tokenPrice: text })}
+                />
+              </View>
+
+              <View>
+                <Text className="mb-2 font-semibold text-white">Tokens for Sale *</Text>
+                <TextInput
+                  className="bg-dark-card border-dark-border rounded-lg border p-3 text-white"
+                  placeholder="e.g., 1000000"
+                  placeholderTextColor="#8E8E93"
+                  keyboardType="numeric"
+                  value={launchForm.tokensForSale}
+                  onChangeText={(text) => setLaunchForm({ ...launchForm, tokensForSale: text })}
+                />
+              </View>
+
+              <View className="flex-row space-x-4">
+                <View className="flex-1">
+                  <Text className="mb-2 font-semibold text-white">Min Contribution (SOL)</Text>
+                  <TextInput
+                    className="bg-dark-card border-dark-border rounded-lg border p-3 text-white"
+                    placeholder="0.1"
+                    placeholderTextColor="#8E8E93"
+                    keyboardType="numeric"
+                    value={launchForm.minContribution}
+                    onChangeText={(text) => setLaunchForm({ ...launchForm, minContribution: text })}
+                  />
+                </View>
+                <View className="flex-1">
+                  <Text className="mb-2 font-semibold text-white">Max Contribution (SOL)</Text>
+                  <TextInput
+                    className="bg-dark-card border-dark-border rounded-lg border p-3 text-white"
+                    placeholder="10"
+                    placeholderTextColor="#8E8E93"
+                    keyboardType="numeric"
+                    value={launchForm.maxContribution}
+                    onChangeText={(text) => setLaunchForm({ ...launchForm, maxContribution: text })}
+                  />
+                </View>
+              </View>
+
+              <TouchableOpacity
+                onPress={createTokenLaunch}
+                disabled={loading}
+                className="bg-primary mt-6 rounded-lg py-4">
+                {loading ? (
+                  <ActivityIndicator color="white" />
+                ) : (
+                  <Text className="text-center text-lg font-bold text-white">Create Launch</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
+
+      {/* Contribute Modal */}
+      <Modal visible={showContributeModal} animationType="slide" presentationStyle="pageSheet">
+        <SafeAreaView className="bg-dark-bg flex-1">
+          <View className="border-dark-border flex-row items-center justify-between border-b p-4">
+            <Text className="text-xl font-bold text-white">Contribute to Launch</Text>
+            <TouchableOpacity onPress={() => setShowContributeModal(false)}>
+              <Ionicons name="close" size={24} color="#8E8E93" />
+            </TouchableOpacity>
+          </View>
+
+          {selectedLaunch && (
+            <View className="flex-1 p-4">
+              <View className="bg-dark-card border-dark-border mb-6 rounded-xl border p-4">
+                <Text className="mb-2 text-lg font-bold text-white">
+                  {selectedLaunch.tokenName} (${selectedLaunch.tokenSymbol})
+                </Text>
+                <Text className="mb-4 text-gray-400">
+                  Price: {formatSOL(selectedLaunch.tokenPrice)} SOL per token
+                </Text>
+                <Text className="text-gray-400">
+                  Range: {formatSOL(selectedLaunch.minContribution)} -{' '}
+                  {formatSOL(selectedLaunch.maxContribution)} SOL
+                </Text>
+              </View>
+
+              <View className="mb-6">
+                <Text className="mb-2 font-semibold text-white">Amount to Contribute (SOL)</Text>
+                <TextInput
+                  className="bg-dark-card border-dark-border rounded-lg border p-4 text-lg text-white"
+                  placeholder="Enter SOL amount"
+                  placeholderTextColor="#8E8E93"
+                  keyboardType="numeric"
+                  value={contributeAmount}
+                  onChangeText={setContributeAmount}
+                />
+                {contributeAmount && (
+                  <Text className="mt-2 text-gray-400">
+                    You will receive: ~
+                    {(
+                      parseFloat(contributeAmount) /
+                      (selectedLaunch.tokenPrice / LAMPORTS_PER_SOL)
+                    ).toFixed(0)}{' '}
+                    {selectedLaunch.tokenSymbol}
+                  </Text>
+                )}
+              </View>
+
+              <TouchableOpacity
+                onPress={contributeToLaunch}
+                disabled={loading || !contributeAmount}
+                className="bg-primary rounded-lg py-4">
+                {loading ? (
+                  <ActivityIndicator color="white" />
+                ) : (
+                  <Text className="text-center text-lg font-bold text-white">
+                    Contribute {contributeAmount || '0'} SOL
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          )}
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   );
 }

@@ -1,3 +1,6 @@
+// Import polyfills first, before any other imports
+import './polyfills';
+
 import React from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -21,7 +24,7 @@ const Tab = createBottomTabNavigator();
 function AppNavigator() {
   return (
     <NavigationContainer>
-      <StatusBar style="light" backgroundColor={Colors.dark.background} />
+      <StatusBar style="light" />
       <Tab.Navigator
         screenOptions={({ route }) => ({
           tabBarIcon: ({ focused, color, size }) => {

@@ -10,7 +10,7 @@ import {
 
 // IntentFI Protocol Fee: 0.3% of transaction value
 export const PROTOCOL_FEE_RATE = 0.003; // 0.3%
-export const INTENTFI_TREASURY = new PublicKey('IntentFi1111111111111111111111111111111111111');
+export const INTENTFI_TREASURY = new PublicKey('11111111111111111111111111111112');
 
 export interface SwapIntentParams {
   fromMint: string;

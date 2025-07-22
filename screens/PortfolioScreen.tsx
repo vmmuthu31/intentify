@@ -1,72 +1,167 @@
-import React, { useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, FlatList } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, FlatList, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { FadeInUp, FadeInLeft, BounceIn } from 'react-native-reanimated';
+import { Keypair, LAMPORTS_PER_SOL } from '@solana/web3.js';
+
+// Import Solana provider and IntentFI services
+import { useSolana } from '../providers/SolanaProvider';
+import { intentFiMobile, networkService } from '../services';
 
 export function PortfolioScreen() {
   const [selectedTimeframe, setSelectedTimeframe] = useState('1D');
+  const [isContractReady, setIsContractReady] = useState(false);
+  const [userKeypair, setUserKeypair] = useState<Keypair | null>(null);
+  const [userProfile, setUserProfile] = useState<any>(null);
+  const [portfolioStats, setPortfolioStats] = useState<any>(null);
+  const [launchpadStats, setLaunchpadStats] = useState<any>(null);
+
+  const { connected, balance, tokenBalances, refreshBalances } = useSolana();
 
   const timeframes = ['1H', '1D', '1W', '1M', '1Y'];
 
-  const assets = [
-    {
-      symbol: 'SOL',
-      name: 'Solana',
-      balance: '45.2',
-      value: '$8,558.40',
-      change: '+5.2%',
-      changeColor: '#00D4AA',
-      price: '$189.50',
-    },
-    {
-      symbol: 'USDC',
-      name: 'USD Coin',
-      balance: '2,150.00',
-      value: '$2,150.00',
-      change: '+0.1%',
-      changeColor: '#00D4AA',
-      price: '$1.00',
-    },
-    {
-      symbol: 'BONK',
-      name: 'Bonk',
-      balance: '1,250,000',
-      value: '$1,125.50',
-      change: '+12.4%',
-      changeColor: '#00D4AA',
-      price: '$0.0009',
-    },
-    {
-      symbol: 'mSOL',
-      name: 'Marinade SOL',
-      balance: '8.7',
-      value: '$1,652.23',
-      change: '-2.1%',
-      changeColor: '#FF4757',
-      price: '$189.91',
-    },
-  ];
+  useEffect(() => {
+    if (connected) {
+      initializePortfolioData();
+    }
+  }, [connected]);
 
-  const activePositions = [
-    {
-      type: 'Lending',
-      protocol: 'Solend',
-      asset: 'USDC',
-      amount: '500.00',
-      apy: '8.2%',
-      earnings: '+$12.50',
-    },
-    {
-      type: 'Staking',
-      protocol: 'Marinade',
-      asset: 'SOL',
-      amount: '10.5',
-      apy: '6.8%',
-      earnings: '+$89.20',
-    },
-  ];
+  const initializePortfolioData = async () => {
+    try {
+      // Initialize IntentFI SDK
+      await intentFiMobile.initialize('devnet');
+
+      // Create test user for demo (in production, use actual wallet)
+      const testKeypair = Keypair.generate();
+      setUserKeypair(testKeypair);
+
+      setIsContractReady(true);
+      await fetchPortfolioData(testKeypair);
+
+      console.log('✅ Portfolio data initialized');
+    } catch (error) {
+      console.error('❌ Failed to initialize portfolio:', error);
+    }
+  };
+
+  const fetchPortfolioData = async (keypair?: Keypair) => {
+    const targetKeypair = keypair || userKeypair;
+    if (!targetKeypair) return;
+
+    try {
+      // Fetch user profile from IntentFI
+      const profile = await intentFiMobile.getUserProfile(targetKeypair.publicKey);
+      setUserProfile(profile);
+
+      // Fetch launchpad data
+      const launchState = await intentFiMobile.advancedSDK.launchpad.getLaunchpadState();
+      setLaunchpadStats(launchState);
+
+      // Calculate portfolio stats
+      const totalTokenValue = tokenBalances.reduce((total, token) => {
+        return total + token.uiAmount * (token.price || 0);
+      }, 0);
+
+      const solValue = balance * 189; // Estimated SOL price
+
+      setPortfolioStats({
+        totalValue: totalTokenValue + solValue,
+        solValue: solValue,
+        tokenValue: totalTokenValue,
+        intentVolume: profile?.account?.totalVolume || 0,
+        activeIntents: profile?.account?.activeIntents || 0,
+        totalIntentsCreated: profile?.account?.totalIntentsCreated || 0,
+        launchContributions: 0, // Would fetch from launchpad contract
+      });
+    } catch (error) {
+      console.error('❌ Failed to fetch portfolio data:', error);
+    }
+  };
+
+  // Format real token balances with estimated prices
+  const formatAssets = () => {
+    const assets = tokenBalances.map((token) => ({
+      symbol: token.symbol,
+      name: token.symbol === 'SOL' ? 'Solana' : token.symbol,
+      balance: token.uiAmount.toLocaleString('en-US', {
+        minimumFractionDigits: token.symbol === 'SOL' ? 4 : 0,
+        maximumFractionDigits: token.symbol === 'SOL' ? 4 : 0,
+      }),
+      value: `$${(token.uiAmount * (token.price || 0)).toLocaleString('en-US', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })}`,
+      change: '+0.0%', // Would need historical data for real changes
+      changeColor: '#8E8E93',
+      price: token.price ? `$${token.price.toFixed(token.symbol === 'SOL' ? 2 : 6)}` : 'N/A',
+      uiAmount: token.uiAmount,
+      mint: token.mint,
+    }));
+
+    // Add SOL if not already present
+    if (!assets.find((asset) => asset.symbol === 'SOL') && balance > 0) {
+      assets.unshift({
+        symbol: 'SOL',
+        name: 'Solana',
+        balance: balance.toFixed(4),
+        value: `$${(balance * 189).toLocaleString('en-US', {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })}`,
+        change: '+0.0%',
+        changeColor: '#8E8E93',
+        price: '$189.00',
+        uiAmount: balance,
+        mint: 'So11111111111111111111111111111111111111112',
+      });
+    }
+
+    return assets.filter((asset) => asset.uiAmount > 0);
+  };
+
+  const handleAssetPress = (asset: any) => {
+    Alert.alert(
+      `${asset.name} (${asset.symbol})`,
+      `Balance: ${asset.balance}\nValue: ${asset.value}\nPrice: ${asset.price}\nMint: ${asset.mint.slice(0, 20)}...`,
+      [
+        { text: 'OK' },
+        {
+          text: 'Create Intent',
+          onPress: () => Alert.alert('Navigate', 'Go to Intent tab to create swap/lend intents'),
+        },
+      ]
+    );
+  };
+
+  const getTotalPortfolioValue = () => {
+    if (!portfolioStats) return '$0.00';
+    return `$${portfolioStats.totalValue.toLocaleString('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}`;
+  };
+
+  const getPortfolioChange = () => {
+    if (!portfolioStats || !userProfile?.account)
+      return { value: '$0.00', percent: '0%', color: '#8E8E93' };
+
+    const intentVolumeValue = (portfolioStats.intentVolume / LAMPORTS_PER_SOL) * 189;
+    const changePercent =
+      portfolioStats.totalValue > 0
+        ? ((intentVolumeValue / portfolioStats.totalValue) * 100).toFixed(1)
+        : '0.0';
+
+    return {
+      value: `$${intentVolumeValue.toFixed(2)}`,
+      percent: `+${changePercent}%`,
+      color: intentVolumeValue > 0 ? '#00D4AA' : '#8E8E93',
+    };
+  };
+
+  const assets = formatAssets();
+  const portfolioChange = getPortfolioChange();
 
   return (
     <SafeAreaView className="bg-dark-bg flex-1">
@@ -74,9 +169,15 @@ export function PortfolioScreen() {
       <Animated.View
         entering={FadeInUp.duration(600)}
         className="flex-row items-center justify-between p-4">
-        <Text className="text-2xl font-bold text-white">Portfolio</Text>
-        <TouchableOpacity className="p-2">
-          <Ionicons name="refresh-outline" size={24} color="#8E8E93" />
+        <View>
+          <Text className="text-2xl font-bold text-white">Portfolio</Text>
+          <Text className="text-sm text-gray-400">
+            {connected ? 'Connected' : 'Not Connected'} •{' '}
+            {isContractReady ? networkService.getCurrentNetwork().toUpperCase() : 'Loading...'}
+          </Text>
+        </View>
+        <TouchableOpacity onPress={refreshBalances} className="p-2">
+          <Ionicons name="refresh" size={24} color="#8E8E93" />
         </TouchableOpacity>
       </Animated.View>
 
@@ -84,150 +185,189 @@ export function PortfolioScreen() {
         {/* Portfolio Value Card */}
         <Animated.View entering={FadeInUp.duration(600).delay(100)} className="mx-4 mb-6">
           <LinearGradient
-            colors={['#1A1A1A', '#2A2A2A']}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
+            colors={['#1F1F23', '#2A2A2E']}
             className="border-dark-border rounded-2xl border p-6">
-            <Text className="text-dark-gray mb-1 text-sm">Total Portfolio Value</Text>
-            <Text className="mb-2 text-3xl font-bold text-white">$12,486.73</Text>
-            <View className="flex-row items-center justify-between">
-              <View className="flex-row items-center">
-                <Ionicons name="trending-up" size={16} color="#00D4AA" />
-                <Text className="text-success ml-1 text-sm">+$1,234.56 (8.4%)</Text>
-              </View>
-              <Text className="text-dark-gray text-sm">24h</Text>
+            <Text className="text-sm text-gray-400">Total Portfolio Value</Text>
+            <Text className="mb-2 text-3xl font-bold text-white">{getTotalPortfolioValue()}</Text>
+            <View className="flex-row items-center">
+              <Ionicons
+                name={portfolioChange.value !== '$0.00' ? 'trending-up' : 'remove'}
+                size={16}
+                color={portfolioChange.color}
+              />
+              <Text className="ml-1 text-sm" style={{ color: portfolioChange.color }}>
+                {portfolioChange.value}
+              </Text>
+              <Text className="ml-2 text-sm" style={{ color: portfolioChange.color }}>
+                ({portfolioChange.percent})
+              </Text>
             </View>
+            {userProfile?.account && (
+              <Text className="mt-2 text-xs text-gray-500">
+                Intent Volume: {(portfolioStats?.intentVolume / LAMPORTS_PER_SOL || 0).toFixed(2)}{' '}
+                SOL
+              </Text>
+            )}
+          </LinearGradient>
+        </Animated.View>
 
-            {/* Chart Timeframe Selector */}
-            <View className="bg-dark-bg mt-4 flex-row rounded-xl p-1">
+        {/* Contract Stats */}
+        {isContractReady && portfolioStats && (
+          <Animated.View entering={FadeInUp.duration(600).delay(150)} className="mx-4 mb-6">
+            <View className="bg-dark-card border-dark-border rounded-xl border p-4">
+              <Text className="mb-3 font-semibold text-white">IntentFI Activity</Text>
+              <View className="flex-row justify-between">
+                <View className="items-center">
+                  <Text className="text-primary text-lg font-bold">
+                    {portfolioStats.totalIntentsCreated}
+                  </Text>
+                  <Text className="text-xs text-gray-400">Total Intents</Text>
+                </View>
+                <View className="items-center">
+                  <Text className="text-primary text-lg font-bold">
+                    {portfolioStats.activeIntents}
+                  </Text>
+                  <Text className="text-xs text-gray-400">Active</Text>
+                </View>
+                <View className="items-center">
+                  <Text className="text-primary text-lg font-bold">
+                    {(portfolioStats.intentVolume / LAMPORTS_PER_SOL).toFixed(1)}
+                  </Text>
+                  <Text className="text-xs text-gray-400">SOL Volume</Text>
+                </View>
+                <View className="items-center">
+                  <Text className="text-primary text-lg font-bold">
+                    {portfolioStats.launchContributions}
+                  </Text>
+                  <Text className="text-xs text-gray-400">Launches</Text>
+                </View>
+              </View>
+            </View>
+          </Animated.View>
+        )}
+
+        {/* Timeframe Selector */}
+        <Animated.View entering={FadeInUp.duration(600).delay(200)} className="mb-6 px-4">
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            <View className="flex-row space-x-3">
               {timeframes.map((timeframe) => (
                 <TouchableOpacity
                   key={timeframe}
                   onPress={() => setSelectedTimeframe(timeframe)}
-                  className={`flex-1 rounded-lg py-2 ${
-                    selectedTimeframe === timeframe ? 'bg-primary' : ''
+                  className={`rounded-full px-4 py-2 ${
+                    selectedTimeframe === timeframe
+                      ? 'bg-primary'
+                      : 'bg-dark-card border-dark-border border'
                   }`}>
                   <Text
-                    className={`text-center text-sm font-medium ${
-                      selectedTimeframe === timeframe ? 'text-white' : 'text-dark-gray'
+                    className={`font-medium ${
+                      selectedTimeframe === timeframe ? 'text-white' : 'text-gray-400'
                     }`}>
                     {timeframe}
                   </Text>
                 </TouchableOpacity>
               ))}
             </View>
-          </LinearGradient>
+          </ScrollView>
         </Animated.View>
 
         {/* Holdings */}
-        <Animated.View entering={FadeInLeft.duration(600).delay(200)} className="mb-6 px-4">
-          <View className="mb-4 flex-row items-center justify-between">
-            <Text className="text-lg font-semibold text-white">Holdings</Text>
-            <TouchableOpacity>
-              <Text className="text-primary text-sm">Rebalance</Text>
-            </TouchableOpacity>
-          </View>
+        <Animated.View entering={FadeInLeft.duration(600).delay(300)} className="mb-8 px-4">
+          <Text className="mb-4 text-lg font-semibold text-white">Holdings ({assets.length})</Text>
 
-          {assets.map((asset, index) => (
-            <Animated.View
-              key={asset.symbol}
-              entering={BounceIn.duration(600).delay(index * 100)}
-              className="mb-3">
-              <TouchableOpacity className="bg-dark-card border-dark-border rounded-2xl border p-4">
-                <View className="flex-row items-center">
+          {!connected ? (
+            <View className="bg-dark-card border-dark-border items-center rounded-xl border p-8">
+              <Ionicons name="wallet-outline" size={48} color="#8E8E93" />
+              <Text className="mt-4 text-center text-gray-400">
+                Connect your wallet to view holdings
+              </Text>
+            </View>
+          ) : assets.length === 0 ? (
+            <View className="bg-dark-card border-dark-border items-center rounded-xl border p-8">
+              <Ionicons name="list-outline" size={48} color="#8E8E93" />
+              <Text className="mt-4 text-center text-gray-400">No tokens found in your wallet</Text>
+              <Text className="mt-2 text-xs text-gray-500">
+                Add some SOL or SPL tokens to get started
+              </Text>
+            </View>
+          ) : (
+            assets.map((asset, index) => (
+              <Animated.View
+                key={asset.symbol}
+                entering={BounceIn.duration(600).delay(index * 100)}>
+                <TouchableOpacity
+                  onPress={() => handleAssetPress(asset)}
+                  className="bg-dark-card border-dark-border mb-3 flex-row items-center rounded-2xl border p-4">
                   <View className="bg-primary/20 mr-4 h-12 w-12 items-center justify-center rounded-full">
-                    <Text className="text-primary text-sm font-bold">{asset.symbol}</Text>
+                    <Text className="text-primary text-sm font-bold">
+                      {asset.symbol.slice(0, 3)}
+                    </Text>
                   </View>
 
                   <View className="flex-1">
-                    <View className="mb-1 flex-row items-center justify-between">
-                      <Text className="text-base font-semibold text-white">{asset.symbol}</Text>
-                      <Text className="text-base font-semibold text-white">{asset.value}</Text>
-                    </View>
                     <View className="flex-row items-center justify-between">
-                      <Text className="text-dark-gray text-sm">
-                        {asset.balance} {asset.symbol}
-                      </Text>
-                      <Text className="text-sm font-medium" style={{ color: asset.changeColor }}>
+                      <View>
+                        <Text className="font-semibold text-white">{asset.symbol}</Text>
+                        <Text className="text-sm text-gray-400">{asset.name}</Text>
+                      </View>
+                      <View className="items-end">
+                        <Text className="font-semibold text-white">{asset.value}</Text>
+                        <Text className="text-sm text-gray-400">
+                          {asset.balance} {asset.symbol}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View className="mt-2 flex-row items-center justify-between">
+                      <Text className="text-xs text-gray-500">Price: {asset.price}</Text>
+                      <Text className="text-xs" style={{ color: asset.changeColor }}>
                         {asset.change}
                       </Text>
                     </View>
                   </View>
-                </View>
-              </TouchableOpacity>
-            </Animated.View>
-          ))}
+
+                  <Ionicons name="chevron-forward" size={20} color="#8E8E93" />
+                </TouchableOpacity>
+              </Animated.View>
+            ))
+          )}
         </Animated.View>
 
-        {/* Active Positions */}
-        <Animated.View entering={FadeInUp.duration(600).delay(300)} className="mb-6 px-4">
-          <View className="mb-4 flex-row items-center justify-between">
-            <Text className="text-lg font-semibold text-white">Active Positions</Text>
-            <TouchableOpacity>
-              <Text className="text-primary text-sm">View All</Text>
-            </TouchableOpacity>
-          </View>
-
-          {activePositions.map((position, index) => (
-            <Animated.View
-              key={index}
-              entering={FadeInUp.duration(400).delay(index * 100)}
-              className="mb-3">
-              <TouchableOpacity className="bg-dark-card border-dark-border rounded-2xl border p-4">
-                <View className="mb-3 flex-row items-center justify-between">
-                  <View className="flex-row items-center">
-                    <View className="bg-success/20 mr-3 h-8 w-8 items-center justify-center rounded-full">
-                      <Ionicons name="trending-up" size={16} color="#00D4AA" />
-                    </View>
-                    <View>
-                      <Text className="font-semibold text-white">{position.type}</Text>
-                      <Text className="text-dark-gray text-sm">{position.protocol}</Text>
-                    </View>
-                  </View>
-                  <Text className="text-success font-semibold">{position.earnings}</Text>
-                </View>
-
-                <View className="flex-row items-center justify-between">
-                  <Text className="text-dark-gray text-sm">
-                    {position.amount} {position.asset} at {position.apy} APY
+        {/* Contract Information */}
+        {isContractReady && userKeypair && (
+          <Animated.View entering={FadeInUp.duration(600).delay(400)} className="mb-8 px-4">
+            <Text className="mb-4 text-lg font-semibold text-white">Contract Information</Text>
+            <View className="bg-dark-card border-dark-border rounded-xl border p-4">
+              <View className="space-y-3">
+                <View className="flex-row justify-between">
+                  <Text className="text-gray-400">Network</Text>
+                  <Text className="text-white">
+                    {networkService.getCurrentNetwork().toUpperCase()}
                   </Text>
-                  <View className="flex-row items-center">
-                    <View className="bg-success mr-2 h-2 w-2 rounded-full" />
-                    <Text className="text-dark-gray text-sm">Active</Text>
-                  </View>
                 </View>
-              </TouchableOpacity>
-            </Animated.View>
-          ))}
-        </Animated.View>
-
-        {/* Portfolio Actions */}
-        <Animated.View entering={FadeInUp.duration(600).delay(400)} className="mb-8 px-4">
-          <Text className="mb-4 text-lg font-semibold text-white">Quick Actions</Text>
-
-          <View className="mb-4 flex-row justify-between">
-            <TouchableOpacity className="bg-primary mr-2 flex-1 rounded-2xl p-4">
-              <View className="items-center">
-                <Ionicons name="swap-horizontal" size={24} color="#FFFFFF" />
-                <Text className="mt-2 font-semibold text-white">Swap</Text>
+                <View className="flex-row justify-between">
+                  <Text className="text-gray-400">Your Wallet</Text>
+                  <Text className="font-mono text-xs text-white">
+                    {userKeypair.publicKey.toString().slice(0, 20)}...
+                  </Text>
+                </View>
+                <View className="flex-row justify-between">
+                  <Text className="text-gray-400">IntentFI Contract</Text>
+                  <Text className="font-mono text-xs text-white">2UPCMZ2L...</Text>
+                </View>
+                <View className="flex-row justify-between">
+                  <Text className="text-gray-400">Launchpad Contract</Text>
+                  <Text className="font-mono text-xs text-white">5y2X9WML...</Text>
+                </View>
+                <View className="border-dark-border border-t pt-3">
+                  <Text className="text-center text-xs text-gray-500">
+                    All contracts deployed on Solana Devnet for testing
+                  </Text>
+                </View>
               </View>
-            </TouchableOpacity>
-
-            <TouchableOpacity className="bg-dark-card border-dark-border ml-2 flex-1 rounded-2xl border p-4">
-              <View className="items-center">
-                <Ionicons name="trending-up" size={24} color="#00D4AA" />
-                <Text className="mt-2 font-semibold text-white">Lend</Text>
-              </View>
-            </TouchableOpacity>
-          </View>
-
-          <TouchableOpacity className="bg-dark-card border-dark-border rounded-2xl border p-4">
-            <View className="flex-row items-center justify-center">
-              <Ionicons name="download-outline" size={20} color="#8E8E93" />
-              <Text className="text-dark-gray ml-2 font-medium">Export Portfolio</Text>
             </View>
-          </TouchableOpacity>
-        </Animated.View>
+          </Animated.View>
+        )}
       </ScrollView>
     </SafeAreaView>
   );
