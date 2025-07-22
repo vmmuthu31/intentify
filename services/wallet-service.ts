@@ -119,82 +119,34 @@ export class WalletService {
   }
 
   /**
-   * Connect to Phantom Wallet (mobile deep linking)
+   * Connect to Phantom Wallet using official SDK
+   * This method should be called from a component that has access to usePhantomWallet
    */
   public async connectPhantom(): Promise<WalletConnectionResult | null> {
     try {
       console.log('🦄 Starting Phantom wallet connection...');
 
-      // Check if Phantom is installed with enhanced detection
-      const phantomInstalled = await this.isPhantomInstalled();
+      // Note: This method now serves as a placeholder
+      // The actual Phantom connection should be handled by components using usePhantomWallet
+      console.log('ℹ️ Use usePhantomWallet hook from components for actual Phantom connection');
 
-      if (!phantomInstalled) {
-        console.log('❌ Phantom not detected, showing install prompt');
-        Alert.alert(
-          'Phantom Wallet Not Found',
-          'Phantom wallet was not detected on your device. Please install it to connect your funded wallet.',
-          [
-            { text: 'Cancel', style: 'cancel' },
-            { text: 'Install Phantom', onPress: () => this.openPhantomInstall() },
-            { text: 'Try Demo Wallet', onPress: () => this.handleDemoWalletFallback() },
-          ]
-        );
-        return null;
-      }
+      Alert.alert(
+        'Phantom Connection Available 🦄',
+        'Phantom wallet integration is ready! Use the "Phantom Wallet" option in the connection screen.',
+        [
+          { text: 'Got it!', style: 'default' },
+          { text: 'Use Demo Instead', onPress: () => this.handleDemoWalletFallback() },
+        ]
+      );
 
-      console.log('✅ Phantom detected! Attempting connection...');
-
-      // Skip biometric auth for Phantom connection to avoid double authentication
-      console.log('🔗 Connecting to your funded Phantom wallet...');
-
-      // Try to open Phantom directly to the main app first
-      try {
-        const phantomAppUrl = 'phantom://';
-        const canOpenApp = await Linking.canOpenURL(phantomAppUrl);
-
-        if (canOpenApp) {
-          await Linking.openURL(phantomAppUrl);
-
-          // Show user instructions
-          Alert.alert(
-            'Connect in Phantom 🦄',
-            "Phantom is opening now.\n\n1. Open your Phantom wallet\n2. Copy your wallet address\n3. Return to IntentFI\n\nWe'll create a demo connection with your address for now.",
-            [
-              { text: 'Connected!', onPress: () => this.handlePhantomResponse() },
-              { text: 'Use Demo Instead', onPress: () => this.handleDemoWalletFallback() },
-            ]
-          );
-
-          return null; // Will handle async via alert buttons
-        }
-      } catch (error) {
-        console.warn('Failed to open Phantom app directly:', error);
-      }
-
-      // Fallback to traditional deep linking
-      console.log('🔗 Trying traditional deep link connection...');
-
-      const sessionId = await this.generateSessionId();
-      const connectUrl = `phantom://v1/connect?dapp_encryption_public_key=${sessionId}&cluster=devnet&app_url=intentify://wallet&redirect_link=intentify://wallet/connected`;
-
-      const canOpen = await Linking.canOpenURL(connectUrl);
-      if (!canOpen) {
-        throw new Error('Cannot establish connection to Phantom wallet');
-      }
-
-      await Linking.openURL(connectUrl);
-      console.log('🔗 Deep link sent to Phantom wallet...');
-
-      // Return a functional demo connection for now
-      // TODO: In production, handle the actual deep link callback
-      return await this.handlePhantomResponse();
+      return null;
     } catch (error) {
-      console.error('Failed to connect to Phantom:', error);
+      console.error('Phantom connection setup failed:', error);
 
       // Offer fallback options
       Alert.alert(
-        'Connection Failed',
-        'Unable to connect to Phantom wallet. Would you like to use a demo wallet instead?',
+        'Connection Setup Failed',
+        'Unable to set up Phantom wallet. Would you like to use a demo wallet instead?',
         [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Use Demo Wallet', onPress: () => this.handleDemoWalletFallback() },

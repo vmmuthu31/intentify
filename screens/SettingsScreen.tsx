@@ -1,14 +1,21 @@
 import React, { useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Switch, Alert } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, Switch, Alert, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { FadeInUp, FadeInLeft } from 'react-native-reanimated';
+
+import { useSolana } from '../providers/SolanaProvider';
+import { usePhantomWallet } from '../providers/PhantomProvider';
 
 export function SettingsScreen() {
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [biometricEnabled, setBiometricEnabled] = useState(true);
   const [rugproofAlerts, setRugproofAlerts] = useState(true);
   const [autoExecute, setAutoExecute] = useState(false);
+
+  // Get wallet state and disconnect functions
+  const { disconnectWallet } = useSolana();
+  const { logout: phantomLogout, isLoggedIn: phantomLoggedIn } = usePhantomWallet();
 
   const settingSections = [
     {
@@ -136,7 +143,29 @@ export function SettingsScreen() {
   const handleLogout = () => {
     Alert.alert('Logout', 'Are you sure you want to logout?', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Logout', style: 'destructive', onPress: () => console.log('Logout') },
+      {
+        text: 'Logout',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            console.log('👋 Logging out user...');
+
+            // Disconnect from Phantom if connected
+            if (phantomLoggedIn) {
+              console.log('🦄 Disconnecting from Phantom...');
+              phantomLogout();
+            }
+
+            // Disconnect from SolanaProvider (this also clears storage)
+            await disconnectWallet();
+
+            console.log('✅ Logout complete - returning to welcome screen');
+          } catch (error) {
+            console.error('Logout error:', error);
+            Alert.alert('Logout Failed', 'There was an issue logging out. Please try again.');
+          }
+        },
+      },
     ]);
   };
 
@@ -153,18 +182,18 @@ export function SettingsScreen() {
         entering={FadeInLeft.duration(400).delay(index * 50)}
         className="mb-1">
         <TouchableOpacity
-          className="bg-dark-card border-dark-border rounded-xl border p-4"
+          className="rounded-xl border border-dark-border bg-dark-card p-4"
           onPress={
             item.type === 'navigation' ? () => console.log(`Navigate to ${item.title}`) : undefined
           }>
           <View className="flex-row items-center">
-            <View className="bg-primary/20 mr-4 h-10 w-10 items-center justify-center rounded-full">
+            <View className="mr-4 h-10 w-10 items-center justify-center rounded-full bg-primary/20">
               <Ionicons name={item.icon as any} size={20} color="#FF4500" />
             </View>
 
             <View className="flex-1">
               <Text className="text-base font-medium text-white">{item.title}</Text>
-              <Text className="text-dark-gray text-sm">{item.subtitle}</Text>
+              <Text className="text-sm text-dark-gray">{item.subtitle}</Text>
             </View>
 
             {item.type === 'toggle' ? (
@@ -184,7 +213,7 @@ export function SettingsScreen() {
   };
 
   return (
-    <SafeAreaView className="bg-dark-bg flex-1">
+    <SafeAreaView className="flex-1 bg-dark-bg">
       {/* Header */}
       <Animated.View
         entering={FadeInUp.duration(600)}
@@ -198,27 +227,29 @@ export function SettingsScreen() {
       <ScrollView className="flex-1 px-4" showsVerticalScrollIndicator={false}>
         {/* Profile Section */}
         <Animated.View entering={FadeInUp.duration(600).delay(100)} className="mb-8">
-          <View className="bg-dark-card border-dark-border rounded-2xl border p-5">
+          <View className="rounded-2xl border border-dark-border bg-dark-card p-5">
             <View className="mb-4 flex-row items-center">
-              <View className="bg-primary mr-4 h-16 w-16 items-center justify-center rounded-full">
-                <Text className="text-xl font-bold text-white">IF</Text>
-              </View>
+              <Image
+                source={require('../assets/logo.png')}
+                className="h-12 w-12"
+                resizeMode="contain"
+              />
               <View className="flex-1">
                 <Text className="text-xl font-bold text-white">IntentFI User</Text>
-                <Text className="text-dark-gray text-sm">0x5b...801A</Text>
+                <Text className="text-sm text-dark-gray"></Text>
               </View>
             </View>
 
             <View className="flex-row space-x-3">
               <TouchableOpacity
-                className="bg-primary/20 flex-1 items-center rounded-xl py-3"
+                className="flex-1 items-center rounded-xl bg-primary/20 py-3"
                 onPress={handleBackup}>
-                <Text className="text-primary font-semibold">Backup Wallet</Text>
+                <Text className="font-semibold text-primary">Backup Wallet</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                className="bg-dark-bg flex-1 items-center rounded-xl py-3"
+                className="flex-1 items-center rounded-xl bg-dark-bg py-3"
                 onPress={handleLogout}>
-                <Text className="text-danger font-semibold">Logout</Text>
+                <Text className="font-semibold text-danger">Logout</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -239,12 +270,12 @@ export function SettingsScreen() {
 
         {/* App Info */}
         <Animated.View entering={FadeInUp.duration(600).delay(600)} className="mb-8 items-center">
-          <Text className="text-dark-gray mb-2 text-sm">IntentFI v1.0.0</Text>
-          <Text className="text-dark-gray text-center text-xs">
+          <Text className="mb-2 text-sm text-dark-gray">IntentFI v1.0.0</Text>
+          <Text className="text-center text-xs text-dark-gray">
             Built for Solana Mobile Hackathon
           </Text>
           <TouchableOpacity className="mt-3">
-            <Text className="text-primary text-sm">View Open Source License</Text>
+            <Text className="text-sm text-primary">View Open Source License</Text>
           </TouchableOpacity>
         </Animated.View>
       </ScrollView>

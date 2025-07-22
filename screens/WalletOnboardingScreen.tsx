@@ -1,4 +1,4 @@
-import { View, Text, Alert } from 'react-native';
+import { View, Text, Alert, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -13,6 +13,7 @@ import Animated, {
 import * as Haptics from 'expo-haptics';
 
 import { useSolana } from '../providers/SolanaProvider';
+import { usePhantomWallet } from '../providers/PhantomProvider';
 import { AnimatedButton } from '../components/AnimatedButton';
 import { walletService, intentFiMobile } from '../services';
 
@@ -22,6 +23,12 @@ interface WalletOnboardingScreenProps {
 
 export function WalletOnboardingScreen({ onComplete }: WalletOnboardingScreenProps) {
   const { connectWallet, connecting, connected } = useSolana();
+  const {
+    isLoggedIn,
+    showLoginOptions,
+    solanaPublicKey,
+    connecting: phantomConnecting,
+  } = usePhantomWallet();
   const scale = useSharedValue(1);
 
   const handleConnectPress = async () => {
@@ -29,10 +36,10 @@ export function WalletOnboardingScreen({ onComplete }: WalletOnboardingScreenPro
 
     // Show wallet options
     Alert.alert('Choose Connection Method', 'Select how you want to get started with IntentFI', [
-      {
-        text: 'Quick Demo (No Auth)',
-        onPress: handleQuickDemo,
-      },
+      // {
+      //   text: 'Quick Demo (No Auth)',
+      //   onPress: handleQuickDemo,
+      // },
       {
         text: 'Secure Wallet (Biometric)',
         onPress: handleSecureWallet,
@@ -131,16 +138,20 @@ export function WalletOnboardingScreen({ onComplete }: WalletOnboardingScreenPro
   };
 
   const handlePhantomConnect = async () => {
+    console.log('handlePhantomConnect');
     scale.value = withSpring(0.95, { damping: 15, stiffness: 300 });
 
     try {
-      await walletService.initialize();
-      const walletResult = await walletService.connectPhantom();
+      console.log('🦄 Starting Phantom connection with official deep linking...');
+      console.log('isLoggedIn', isLoggedIn);
+      console.log('solanaPublicKey', solanaPublicKey);
 
-      if (walletResult && walletResult.connected) {
+      // Check if already logged in to Phantom
+      if (isLoggedIn && solanaPublicKey) {
+        console.log('✅ Already connected to Phantom!');
         Alert.alert(
           'Phantom Wallet Connected! 🎉',
-          `Welcome to IntentFI! Connected to: ${walletResult.publicKey.toString().slice(0, 4)}...${walletResult.publicKey.toString().slice(-4)}`,
+          `Welcome back! Connected to: ${solanaPublicKey.toString().slice(0, 4)}...${solanaPublicKey.toString().slice(-4)}\n\n🚀 Your wallet is already funded and ready to go!`,
           [
             {
               text: 'Start Trading',
@@ -148,12 +159,35 @@ export function WalletOnboardingScreen({ onComplete }: WalletOnboardingScreenPro
             },
           ]
         );
+        return;
       }
+
+      // Show Phantom login options
+      console.log('🔗 Opening Phantom login...');
+      showLoginOptions();
+
+      // Auto-complete when connection is successful
+      const checkConnection = setInterval(() => {
+        if (isLoggedIn && solanaPublicKey) {
+          console.log('✅ Phantom connected! SolanaProvider should auto-sync...');
+          clearInterval(checkConnection);
+
+          // Complete onboarding quickly since mobile wallet adapter is more reliable
+          setTimeout(() => {
+            console.log('🚀 Completing onboarding...');
+            onComplete();
+          }, 1000);
+        }
+      }, 1000);
     } catch (error) {
       console.error('Phantom connection failed:', error);
       Alert.alert(
         'Connection Failed',
-        'Please make sure Phantom wallet is installed and try again.'
+        'Unable to connect to Phantom. Would you like to try a demo wallet instead?',
+        [
+          { text: 'Try Again', onPress: handlePhantomConnect },
+          { text: 'Use Demo', onPress: handleQuickDemo },
+        ]
       );
     }
 
@@ -167,15 +201,15 @@ export function WalletOnboardingScreen({ onComplete }: WalletOnboardingScreenPro
   });
 
   return (
-    <SafeAreaView className="bg-dark-bg flex-1">
+    <SafeAreaView className="flex-1 bg-dark-bg">
       {/* Header */}
       <Animated.View entering={FadeInUp.duration(600)} className="items-center p-6 pt-12">
-        <View className="bg-primary mb-6 h-24 w-24 items-center justify-center rounded-full">
-          <Text className="text-2xl font-bold text-white">IF</Text>
-        </View>
+        <Image source={require('../assets/logo.png')} className="h-12 w-12" resizeMode="contain" />
 
-        <Text className="mb-3 text-center text-3xl font-bold text-white">Welcome to IntentFI</Text>
-        <Text className="text-dark-gray text-center text-base leading-6">
+        <Text className="mb-3 mt-6 text-center text-3xl font-bold text-white">
+          Welcome to IntentFI
+        </Text>
+        <Text className="text-center text-base leading-6 text-dark-gray">
           The first mobile intent-based DeFi superapp with rugproof protection
         </Text>
       </Animated.View>
@@ -188,12 +222,12 @@ export function WalletOnboardingScreen({ onComplete }: WalletOnboardingScreenPro
           <Animated.View
             entering={BounceIn.duration(400).delay(300)}
             className="flex-row items-center">
-            <View className="bg-primary/20 mr-4 h-12 w-12 items-center justify-center rounded-full">
+            <View className="mr-4 h-12 w-12 items-center justify-center rounded-full bg-primary/20">
               <Ionicons name="flash" size={24} color="#FF4500" />
             </View>
             <View className="flex-1">
               <Text className="text-base font-semibold text-white">Intent-Based Trading</Text>
-              <Text className="text-dark-gray text-sm">
+              <Text className="text-sm text-dark-gray">
                 Simply say &quot;I want 10 SOL → USDC at best price&quot; and we handle the rest
               </Text>
             </View>
@@ -202,12 +236,12 @@ export function WalletOnboardingScreen({ onComplete }: WalletOnboardingScreenPro
           <Animated.View
             entering={BounceIn.duration(400).delay(400)}
             className="flex-row items-center">
-            <View className="bg-success/20 mr-4 h-12 w-12 items-center justify-center rounded-full">
+            <View className="mr-4 h-12 w-12 items-center justify-center rounded-full bg-success/20">
               <Ionicons name="shield-checkmark" size={24} color="#00D4AA" />
             </View>
             <View className="flex-1">
               <Text className="text-base font-semibold text-white">Rugproof Protection</Text>
-              <Text className="text-dark-gray text-sm">
+              <Text className="text-sm text-dark-gray">
                 Every token is analyzed for safety before you trade
               </Text>
             </View>
@@ -216,12 +250,12 @@ export function WalletOnboardingScreen({ onComplete }: WalletOnboardingScreenPro
           <Animated.View
             entering={BounceIn.duration(400).delay(500)}
             className="flex-row items-center">
-            <View className="bg-warning/20 mr-4 h-12 w-12 items-center justify-center rounded-full">
+            <View className="mr-4 h-12 w-12 items-center justify-center rounded-full bg-warning/20">
               <Ionicons name="phone-portrait" size={24} color="#FFB800" />
             </View>
             <View className="flex-1">
               <Text className="text-base font-semibold text-white">Mobile Native</Text>
-              <Text className="text-dark-gray text-sm">
+              <Text className="text-sm text-dark-gray">
                 Built for Solana Mobile with haptic feedback and smooth gestures
               </Text>
             </View>
@@ -235,7 +269,7 @@ export function WalletOnboardingScreen({ onComplete }: WalletOnboardingScreenPro
             </View>
             <View className="flex-1">
               <Text className="text-base font-semibold text-white">Token Launchpad</Text>
-              <Text className="text-dark-gray text-sm">
+              <Text className="text-sm text-dark-gray">
                 Discover and invest in new tokens with built-in safety checks
               </Text>
             </View>
@@ -249,16 +283,16 @@ export function WalletOnboardingScreen({ onComplete }: WalletOnboardingScreenPro
           colors={['#1A1A1A', '#2A2A2A']}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
-          className="border-dark-border rounded-2xl border p-4">
+          className="rounded-2xl border border-dark-border p-4">
           <View className="flex-row items-center">
             <View className="mr-3 h-10 w-10 items-center justify-center rounded-full bg-purple-500/20">
               <Ionicons name="globe" size={20} color="#8B5CF6" />
             </View>
             <View className="flex-1">
               <Text className="font-semibold text-white">Solana Devnet</Text>
-              <Text className="text-dark-gray text-sm">Safe testing environment with fake SOL</Text>
+              <Text className="text-sm text-dark-gray">Safe testing environment with fake SOL</Text>
             </View>
-            <View className="bg-success h-3 w-3 animate-pulse rounded-full" />
+            <View className="h-3 w-3 animate-pulse rounded-full bg-success" />
           </View>
         </LinearGradient>
       </Animated.View>
@@ -267,7 +301,7 @@ export function WalletOnboardingScreen({ onComplete }: WalletOnboardingScreenPro
       <Animated.View entering={FadeInUp.duration(600).delay(500)} className="px-6 pb-8">
         <Animated.View style={animatedStyle}>
           <AnimatedButton
-            title={connecting ? 'Connecting...' : 'Connect Demo Wallet'}
+            title={connecting ? 'Connecting...' : 'Connect Wallet'}
             onPress={handleConnectPress}
             variant="primary"
             size="large"
@@ -275,7 +309,7 @@ export function WalletOnboardingScreen({ onComplete }: WalletOnboardingScreenPro
             loading={connecting}
           />
 
-          <Text className="text-dark-gray mt-4 text-center text-xs">
+          <Text className="mt-4 text-center text-xs text-dark-gray">
             Demo mode • No real funds required • Solana devnet
           </Text>
         </Animated.View>

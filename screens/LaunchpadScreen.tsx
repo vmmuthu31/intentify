@@ -19,6 +19,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Import launchpad services
 import { intentFiMobile, networkService, walletService } from '../services';
+import { useSolana } from '../providers/SolanaProvider';
 
 interface LaunchData {
   creator: string;
@@ -41,6 +42,7 @@ interface LaunchData {
 }
 
 export function LaunchpadScreen() {
+  const { connected, publicKey } = useSolana();
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [isInitialized, setIsInitialized] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -83,17 +85,29 @@ export function LaunchpadScreen() {
       await intentFiMobile.initialize('devnet');
       console.log('✅ Launchpad SDK initialized on devnet');
 
-      // Get or create a funded wallet seamlessly
-      const { publicKey: walletPublicKey, hasFunds } =
-        await intentFiMobile.getOrCreateFundedWallet();
-      console.log('👤 Launchpad wallet ready:', walletPublicKey.toString().slice(0, 8) + '...');
+      // Use the connected Phantom wallet if available
+      if (connected && publicKey) {
+        console.log(
+          '✅ Using connected Phantom wallet for Launchpad:',
+          publicKey.toString().slice(0, 8) + '...'
+        );
+        // No need to create or fund wallet - user has their own Phantom wallet with funds
+      } else {
+        // Fallback: Get or create a funded wallet seamlessly
+        const { publicKey: walletPublicKey, hasFunds } =
+          await intentFiMobile.getOrCreateFundedWallet();
+        console.log(
+          '👤 Launchpad fallback wallet ready:',
+          walletPublicKey.toString().slice(0, 8) + '...'
+        );
 
-      // Ensure wallet has minimum funds for operations
-      if (!hasFunds) {
-        console.log('💧 Ensuring launchpad wallet is funded...');
-        const fundingResult = await intentFiMobile.ensureWalletFunded(walletPublicKey, 0.1);
-        if (!fundingResult) {
-          console.warn('⚠️ Wallet funding failed - some launchpad features may be limited');
+        // Ensure wallet has minimum funds for operations
+        if (!hasFunds) {
+          console.log('💧 Ensuring launchpad wallet is funded...');
+          const fundingResult = await intentFiMobile.ensureWalletFunded(walletPublicKey, 0.1);
+          if (!fundingResult) {
+            console.warn('⚠️ Wallet funding failed - some launchpad features may be limited');
+          }
         }
       }
 

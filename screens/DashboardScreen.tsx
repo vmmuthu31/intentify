@@ -54,17 +54,23 @@ export function DashboardScreen() {
       await intentFiMobile.initialize('devnet');
       console.log('🚀 IntentFI SDK initialized');
 
-      // Get or create a funded wallet seamlessly
-      const { publicKey: walletPublicKey, hasFunds } =
-        await intentFiMobile.getOrCreateFundedWallet();
-      console.log('👤 Wallet ready:', walletPublicKey.toString().slice(0, 8) + '...');
+      // Use the connected Phantom wallet if available
+      if (connected && publicKey) {
+        console.log('✅ Using connected Phantom wallet:', publicKey.toString().slice(0, 8) + '...');
+        // No need to create or fund wallet - user has their own Phantom wallet with funds
+      } else {
+        // Fallback: Get or create a funded wallet seamlessly
+        const { publicKey: walletPublicKey, hasFunds } =
+          await intentFiMobile.getOrCreateFundedWallet();
+        console.log('👤 Fallback wallet ready:', walletPublicKey.toString().slice(0, 8) + '...');
 
-      // Ensure wallet has minimum funds for operations
-      if (!hasFunds) {
-        console.log('💧 Ensuring wallet is funded...');
-        const fundingResult = await intentFiMobile.ensureWalletFunded(walletPublicKey, 0.05);
-        if (!fundingResult) {
-          console.warn('⚠️ Wallet funding failed - some features may be limited');
+        // Ensure wallet has minimum funds for operations
+        if (!hasFunds) {
+          console.log('💧 Ensuring wallet is funded...');
+          const fundingResult = await intentFiMobile.ensureWalletFunded(walletPublicKey, 0.05);
+          if (!fundingResult) {
+            console.warn('⚠️ Wallet funding failed - some features may be limited');
+          }
         }
       }
 
@@ -300,32 +306,32 @@ export function DashboardScreen() {
   };
 
   return (
-    <SafeAreaView className="bg-dark-bg flex-1">
+    <SafeAreaView className="flex-1 bg-dark-bg">
       <PullToRefresh onRefresh={handleRefresh}>
         {/* Header */}
         <Animated.View
           entering={FadeInUp.duration(600)}
           className="flex-row items-center justify-between p-4 pt-2">
           <View>
-            <Text className="text-dark-gray text-sm">Welcome back</Text>
+            <Text className="text-sm text-dark-gray">Welcome back</Text>
             <Text className="text-xl font-bold text-white">IntentFI</Text>
             {isContractReady && (
-              <Text className="text-primary text-xs">
+              <Text className="text-xs text-primary">
                 📡 {networkService.getCurrentNetwork().toUpperCase()}
               </Text>
             )}
           </View>
           <View className="flex-row items-center">
             {connected && (
-              <View className="bg-success/20 mr-3 rounded-full px-3 py-1">
-                <Text className="text-success text-xs font-medium">
+              <View className="mr-3 rounded-full bg-success/20 px-3 py-1">
+                <Text className="text-xs font-medium text-success">
                   {publicKey?.toString().slice(0, 4)}...{publicKey?.toString().slice(-4)}
                 </Text>
               </View>
             )}
             {isContractReady && (
-              <View className="bg-primary/20 mr-3 rounded-full px-2 py-1">
-                <Text className="text-primary text-xs font-medium">Contract ✓</Text>
+              <View className="mr-3 rounded-full bg-primary/20 px-2 py-1">
+                <Text className="text-xs font-medium text-primary">Contract ✓</Text>
               </View>
             )}
             <TouchableOpacity className="p-2">
@@ -366,29 +372,29 @@ export function DashboardScreen() {
         {/* Protocol Stats */}
         {protocolStats && isContractReady && (
           <Animated.View entering={FadeInUp.duration(600).delay(150)} className="mx-4 mb-6">
-            <View className="bg-dark-card border-dark-border rounded-xl border p-4">
+            <View className="rounded-xl border border-dark-border bg-dark-card p-4">
               <Text className="mb-3 font-semibold text-white">Protocol Statistics</Text>
               <View className="flex-row justify-between">
                 <View className="items-center">
-                  <Text className="text-primary text-lg font-bold">
+                  <Text className="text-lg font-bold text-primary">
                     {protocolStats.totalIntents}
                   </Text>
                   <Text className="text-xs text-gray-400">Total Intents</Text>
                 </View>
                 <View className="items-center">
-                  <Text className="text-primary text-lg font-bold">
+                  <Text className="text-lg font-bold text-primary">
                     {protocolStats.activeIntents}
                   </Text>
                   <Text className="text-xs text-gray-400">Active</Text>
                 </View>
                 <View className="items-center">
-                  <Text className="text-primary text-lg font-bold">
+                  <Text className="text-lg font-bold text-primary">
                     {protocolStats.totalLaunches}
                   </Text>
                   <Text className="text-xs text-gray-400">Launches</Text>
                 </View>
                 <View className="items-center">
-                  <Text className="text-primary text-lg font-bold">
+                  <Text className="text-lg font-bold text-primary">
                     {(protocolStats.totalRaised / LAMPORTS_PER_SOL).toFixed(1)}
                   </Text>
                   <Text className="text-xs text-gray-400">SOL Raised</Text>
@@ -406,7 +412,7 @@ export function DashboardScreen() {
               <Animated.View key={action.id} entering={BounceIn.duration(600).delay(index * 100)}>
                 <TouchableOpacity
                   onPress={() => handleQuickAction(action)}
-                  className="bg-dark-card border-dark-border w-20 items-center rounded-2xl border py-4">
+                  className="w-20 items-center rounded-2xl border border-dark-border bg-dark-card py-4">
                   <View
                     className="mb-2 h-12 w-12 items-center justify-center rounded-full"
                     style={{ backgroundColor: `${action.color}20` }}>
@@ -426,17 +432,17 @@ export function DashboardScreen() {
               Active Intents ({activeIntents.length})
             </Text>
             <TouchableOpacity>
-              <Text className="text-primary text-sm">View All</Text>
+              <Text className="text-sm text-primary">View All</Text>
             </TouchableOpacity>
           </View>
 
           {!isContractReady ? (
-            <View className="bg-dark-card border-dark-border items-center rounded-xl border p-6">
+            <View className="items-center rounded-xl border border-dark-border bg-dark-card p-6">
               <Ionicons name="refresh" size={24} color="#8E8E93" />
               <Text className="mt-2 text-gray-400">Loading contract data...</Text>
             </View>
           ) : activeIntents.length === 0 ? (
-            <View className="bg-dark-card border-dark-border items-center rounded-xl border p-6">
+            <View className="items-center rounded-xl border border-dark-border bg-dark-card p-6">
               <Ionicons name="flash-outline" size={32} color="#8E8E93" />
               <Text className="mt-2 text-center text-gray-400">
                 {userProfile?.account
@@ -463,7 +469,7 @@ export function DashboardScreen() {
                     color: '#10B981',
                     label: 'Execute',
                   }}>
-                  <View className="bg-dark-card border-dark-border mb-3 rounded-2xl border p-4">
+                  <View className="mb-3 rounded-2xl border border-dark-border bg-dark-card p-4">
                     <View className="flex-row items-center justify-between">
                       <View className="flex-1">
                         <View className="mb-1 flex-row items-center">
@@ -473,7 +479,7 @@ export function DashboardScreen() {
                           />
                           <Text className="font-semibold text-white">{intent.type} Intent</Text>
                         </View>
-                        <Text className="text-dark-gray mb-1 text-sm">{intent.description}</Text>
+                        <Text className="mb-1 text-sm text-dark-gray">{intent.description}</Text>
                         <Text className="text-xs text-gray-500">Created: {intent.createdAt}</Text>
                       </View>
                       <View className="items-end">
@@ -497,10 +503,10 @@ export function DashboardScreen() {
           <Text className="mb-4 text-lg font-semibold text-white">Recent Activity</Text>
 
           {isContractReady && userKeypair ? (
-            <View className="bg-dark-card border-dark-border rounded-xl border p-4">
+            <View className="rounded-xl border border-dark-border bg-dark-card p-4">
               <View className="mb-3 flex-row items-center justify-between">
                 <View className="flex-row items-center">
-                  <View className="bg-primary/20 mr-3 h-8 w-8 items-center justify-center rounded-full">
+                  <View className="mr-3 h-8 w-8 items-center justify-center rounded-full bg-primary/20">
                     <Ionicons name="person-add" size={16} color="#FF4500" />
                   </View>
                   <View>
@@ -511,7 +517,7 @@ export function DashboardScreen() {
                 <Text className="text-xs text-gray-400">Just now</Text>
               </View>
 
-              <View className="border-dark-border border-t pt-3">
+              <View className="border-t border-dark-border pt-3">
                 <Text className="text-xs text-gray-400">
                   Wallet: {userKeypair.publicKey.toString().slice(0, 20)}...
                 </Text>
@@ -527,7 +533,7 @@ export function DashboardScreen() {
               </View>
             </View>
           ) : (
-            <View className="bg-dark-card border-dark-border items-center rounded-xl border p-6">
+            <View className="items-center rounded-xl border border-dark-border bg-dark-card p-6">
               <Ionicons name="time-outline" size={24} color="#8E8E93" />
               <Text className="mt-2 text-gray-400">No recent activity</Text>
               <Text className="text-xs text-gray-500">

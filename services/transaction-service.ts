@@ -1,7 +1,18 @@
 // Transaction Service for handling pre-flight checks and ensuring successful transactions
 import { PublicKey, Transaction, Connection, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { networkService } from './config';
-import { intentFiMobile } from './index';
+
+// Import specific services to avoid circular dependency
+let intentFiMobile: any;
+
+// Lazy load to avoid circular dependency
+const getIntentFiMobile = async () => {
+  if (!intentFiMobile) {
+    const { intentFiMobile: mobile } = await import('./index');
+    intentFiMobile = mobile;
+  }
+  return intentFiMobile;
+};
 
 export interface TransactionPreflightResult {
   canProceed: boolean;
@@ -78,7 +89,8 @@ export class TransactionService {
 
       // Try to fund the wallet if it's insufficient
       console.log('💧 Attempting to fund wallet...');
-      const fundingSuccess = await intentFiMobile.ensureWalletFunded(publicKey, requiredAmount);
+      const mobile = await getIntentFiMobile();
+      const fundingSuccess = await mobile.ensureWalletFunded(publicKey, requiredAmount);
 
       if (fundingSuccess) {
         const recheckPreflight = await this.checkTransactionViability(publicKey, requiredAmount);

@@ -20,10 +20,15 @@ import * as Haptics from 'expo-haptics';
 
 // Import IntentFI services
 import { intentFiMobile, networkService, transactionService } from '../services';
+import { useSolana } from '../providers/SolanaProvider';
+
+// Import types
+import type { UserProfile, IntentBuilderData } from '../types';
 
 const { width } = Dimensions.get('window');
 
 export function IntentScreen() {
+  const { publicKey, connected, balance, refreshBalances } = useSolana();
   const [selectedTab, setSelectedTab] = useState(0);
   const [showIntentBuilder, setShowIntentBuilder] = useState(false);
   const [builderIntentType, setBuilderIntentType] = useState<'swap' | 'buy' | 'lend' | 'launch'>(
@@ -32,10 +37,10 @@ export function IntentScreen() {
 
   // IntentFI state
   const [isInitialized, setIsInitialized] = useState(false);
-  const [userKeypair, setUserKeypair] = useState<Keypair | null>(null);
-  const [userProfile, setUserProfile] = useState<any>(null);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(false);
   const [recentIntents, setRecentIntents] = useState<any[]>([]);
+  const [walletBalance, setWalletBalance] = useState<number>(0);
 
   const translateX = useSharedValue(0);
 
@@ -57,11 +62,20 @@ export function IntentScreen() {
     { from: 'SOL', to: 'BONK', description: 'Test swap on devnet', amount: '5 SOL' },
   ];
 
-  useEffect(() => {
-    initializeIntentFI();
-  }, []);
+  const fetchWalletBalance = async () => {
+    if (!publicKey) return;
+    try {
+      const connection = networkService.getConnection();
+      const bal = await connection.getBalance(publicKey);
+      setWalletBalance(bal / LAMPORTS_PER_SOL);
+    } catch (error) {
+      setWalletBalance(0);
+    }
+  };
 
   const initializeIntentFI = async () => {
+    if (!publicKey) return;
+
     try {
       setLoading(true);
 
@@ -70,14 +84,14 @@ export function IntentScreen() {
       console.log('✅ IntentFI SDK initialized on devnet');
 
       // Create test user (in production, use wallet integration)
-      const testKeypair = Keypair.generate();
-      setUserKeypair(testKeypair);
+      // const testKeypair = Keypair.generate();
+      // setUserKeypair(testKeypair);
 
-      console.log('👤 Test user created:', testKeypair.publicKey.toString());
+      console.log('👤 Test user created:', publicKey.toString());
       setIsInitialized(true);
 
       // Try to fetch user profile (will be null until user is initialized)
-      await fetchUserProfile(testKeypair);
+      await fetchUserProfile();
     } catch (error) {
       console.error('❌ Failed to initialize IntentFI:', error);
       Alert.alert('Error', 'Failed to initialize IntentFI SDK');
@@ -86,12 +100,10 @@ export function IntentScreen() {
     }
   };
 
-  const fetchUserProfile = async (keypair?: Keypair) => {
-    const targetKeypair = keypair || userKeypair;
-    if (!targetKeypair) return;
-
+  const fetchUserProfile = async () => {
+    if (!publicKey) return;
     try {
-      const profile = await intentFiMobile.getUserProfile(targetKeypair.publicKey);
+      const profile = await intentFiMobile.getUserProfile(publicKey);
       setUserProfile(profile);
 
       // Convert intents to display format
@@ -114,8 +126,8 @@ export function IntentScreen() {
   };
 
   const initializeUserAccount = async () => {
-    if (!userKeypair) {
-      Alert.alert('No Wallet', 'Please create a wallet first');
+    if (!publicKey || !connected) {
+      Alert.alert('No Wallet', 'Please connect your wallet first');
       return;
     }
 
@@ -123,12 +135,12 @@ export function IntentScreen() {
       setLoading(true);
 
       // Check wallet status
-      const walletStatus = await transactionService.getWalletStatusMessage(userKeypair.publicKey);
+      const walletStatus = await transactionService.getWalletStatusMessage(publicKey);
       console.log('💳 Wallet status:', walletStatus);
 
       // Prepare wallet for transaction
       const isReady = await transactionService.prepareWalletForTransaction(
-        userKeypair.publicKey,
+        publicKey,
         0.01 // Need at least 0.01 SOL for initialization
       );
 
@@ -139,13 +151,36 @@ export function IntentScreen() {
           [
             { text: 'Cancel', style: 'cancel' },
             { text: 'Auto-Fund', onPress: () => attemptFunding() },
-            { text: 'Quick Demo', onPress: () => switchToQuickDemo() },
+            // { text: 'Quick Demo', onPress: () => switchToQuickDemo() },
           ]
         );
         return;
       }
 
       console.log('🚀 Wallet ready, initializing user account...');
+
+      // Create a keypair from the publicKey for signing
+      // Note: In a real app, you'd need the actual private key for signing
+      // For demo purposes, we'll use the demo wallet functionality
+      const { publicKey: demoPublicKey } = await intentFiMobile.getOrCreateFundedWallet();
+
+      // Get the stored wallet data to create a proper keypair
+      const storedWallet = await AsyncStorage.getItem('secure_wallet_data');
+      if (!storedWallet) {
+        throw new Error('No wallet data found. Please reconnect your wallet.');
+      }
+
+      const parsed = JSON.parse(storedWallet);
+      if (!parsed.privateKey || !Array.isArray(parsed.privateKey)) {
+        throw new Error('Invalid wallet data. Please reconnect your wallet.');
+      }
+
+      const secretKeyArray = new Uint8Array(parsed.privateKey);
+      if (secretKeyArray.length !== 64) {
+        throw new Error('Invalid private key length. Please reconnect your wallet.');
+      }
+
+      const userKeypair = Keypair.fromSecretKey(secretKeyArray);
 
       const userTx = await intentFiMobile.advancedSDK.intentFi.initializeUser(userKeypair);
       const signature = await intentFiMobile.advancedSDK.sendTransaction(userTx, userKeypair);
@@ -166,22 +201,27 @@ export function IntentScreen() {
       if (error.message && error.message.includes('Attempt to debit an account')) {
         errorMessage =
           'Insufficient SOL for transaction fees.\n\nPlease fund your wallet or use Quick Demo mode.';
+      } else if (error.message && error.message.includes('wallet data')) {
+        errorMessage = error.message + '\n\nTry using Quick Demo mode for instant access.';
       } else if (error.message) {
         errorMessage = error.message;
       }
 
-      Alert.alert('Initialization Failed', errorMessage);
+      Alert.alert('Initialization Failed', errorMessage, [
+        { text: 'OK' },
+        { text: 'Quick Demo', onPress: () => switchToQuickDemo() },
+      ]);
     } finally {
       setLoading(false);
     }
   };
 
   const attemptFunding = async () => {
-    if (!userKeypair) return;
+    if (!publicKey || !connected) return;
 
     try {
       console.log('💧 Attempting to fund wallet...');
-      const fundingSuccess = await intentFiMobile.ensureWalletFunded(userKeypair.publicKey, 0.05);
+      const fundingSuccess = await intentFiMobile.ensureWalletFunded(publicKey, 0.05);
 
       if (fundingSuccess) {
         Alert.alert(
@@ -211,7 +251,7 @@ export function IntentScreen() {
       console.log('🚀 Switching to Quick Demo mode...');
 
       // Get or create a pre-funded demo wallet
-      const { publicKey, hasFunds } = await intentFiMobile.getOrCreateFundedWallet();
+      const { publicKey: demoPublicKey, hasFunds } = await intentFiMobile.getOrCreateFundedWallet();
 
       // Update the current user keypair to use the demo wallet
       const storedWallet = await AsyncStorage.getItem('secure_wallet_data');
@@ -221,19 +261,19 @@ export function IntentScreen() {
           const secretKeyArray = new Uint8Array(parsed.privateKey);
           if (secretKeyArray.length === 64) {
             const demoKeypair = Keypair.fromSecretKey(secretKeyArray);
-            setUserKeypair(demoKeypair);
+            // Demo keypair is ready for use
           }
         }
       }
 
       // Try to fund if needed
       if (!hasFunds) {
-        await intentFiMobile.ensureWalletFunded(publicKey, 0.05);
+        await intentFiMobile.ensureWalletFunded(demoPublicKey, 0.05);
       }
 
       Alert.alert(
         'Quick Demo Ready! 🚀',
-        `Demo wallet activated: ${publicKey.toString().slice(0, 8)}...\n\n✨ You can now try IntentFI features!`,
+        `Demo wallet activated: ${demoPublicKey.toString().slice(0, 8)}...\n\n✨ You can now try IntentFI features!`,
         [{ text: 'Start Using', onPress: () => setShowIntentBuilder(true) }]
       );
 
@@ -261,6 +301,11 @@ export function IntentScreen() {
   };
 
   const handleTemplatePress = (template: any) => {
+    if (!publicKey || !connected) {
+      Alert.alert('Setup Required', 'Please connect your wallet first');
+      return;
+    }
+
     if (!userProfile?.account) {
       Alert.alert('Setup Required', 'Please initialize your user account first');
       return;
@@ -272,6 +317,11 @@ export function IntentScreen() {
   };
 
   const handleFABPress = () => {
+    if (!publicKey || !connected) {
+      Alert.alert('Setup Required', 'Please connect your wallet first');
+      return;
+    }
+
     if (!userProfile?.account) {
       Alert.alert('Setup Required', 'Please initialize your user account first');
       return;
@@ -281,12 +331,33 @@ export function IntentScreen() {
     setShowIntentBuilder(true);
   };
 
-  const handleCreateIntent = async (intentData: any) => {
-    if (!userKeypair) return;
+  const handleCreateIntent = async (intentData: IntentBuilderData) => {
+    if (!publicKey || !connected) {
+      Alert.alert('No Wallet', 'Please connect your wallet first');
+      return;
+    }
 
     try {
       setLoading(true);
       let signature = '';
+
+      // Get the stored wallet data to create a proper keypair
+      const storedWallet = await AsyncStorage.getItem('secure_wallet_data');
+      if (!storedWallet) {
+        throw new Error('No wallet data found. Please reconnect your wallet.');
+      }
+
+      const parsed = JSON.parse(storedWallet);
+      if (!parsed.privateKey || !Array.isArray(parsed.privateKey)) {
+        throw new Error('Invalid wallet data. Please reconnect your wallet.');
+      }
+
+      const secretKeyArray = new Uint8Array(parsed.privateKey);
+      if (secretKeyArray.length !== 64) {
+        throw new Error('Invalid private key length. Please reconnect your wallet.');
+      }
+
+      const userKeypair = Keypair.fromSecretKey(secretKeyArray);
 
       if (intentData.type === 'swap') {
         // Create swap intent
@@ -320,7 +391,16 @@ export function IntentScreen() {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     } catch (error: any) {
       console.error('❌ Intent creation failed:', error);
-      Alert.alert('Error', error.message || 'Failed to create intent');
+
+      let errorMessage = error.message || 'Failed to create intent';
+      if (error.message && error.message.includes('wallet data')) {
+        errorMessage = error.message + '\n\nTry using Quick Demo mode for instant access.';
+      }
+
+      Alert.alert('Error', errorMessage, [
+        { text: 'OK' },
+        { text: 'Quick Demo', onPress: () => switchToQuickDemo() },
+      ]);
     } finally {
       setLoading(false);
     }
@@ -347,8 +427,14 @@ export function IntentScreen() {
     }
   };
 
+  useEffect(() => {
+    if (publicKey && connected) {
+      initializeIntentFI();
+      fetchWalletBalance();
+    }
+  }, [publicKey, connected, initializeIntentFI, fetchWalletBalance]);
   return (
-    <SafeAreaView className="bg-dark-bg flex-1">
+    <SafeAreaView className="flex-1 bg-dark-bg">
       {/* Header */}
       <Animated.View
         entering={FadeInUp.duration(600)}
@@ -365,15 +451,33 @@ export function IntentScreen() {
         </TouchableOpacity>
       </Animated.View>
 
-      {/* User Account Status */}
-      {isInitialized && userKeypair && (
+      {/* Connection Status */}
+      {!connected && (
         <Animated.View entering={FadeInUp.duration(600).delay(50)} className="mx-4 mb-4">
-          <View className="bg-dark-card border-dark-border rounded-xl border p-4">
+          <View className="rounded-xl border border-yellow-500/30 bg-yellow-500/10 p-4">
+            <View className="flex-row items-center">
+              <Ionicons name="warning" size={20} color="#F59E0B" />
+              <Text className="ml-2 font-semibold text-yellow-400">Wallet Not Connected</Text>
+            </View>
+            <Text className="mt-2 text-sm text-yellow-300">
+              Please connect your wallet to use IntentFI features
+            </Text>
+          </View>
+        </Animated.View>
+      )}
+
+      {/* User Account Status */}
+      {isInitialized && publicKey && connected && (
+        <Animated.View entering={FadeInUp.duration(600).delay(50)} className="mx-4 mb-4">
+          <View className="rounded-xl border border-dark-border bg-dark-card p-4">
             <View className="flex-row items-center justify-between">
               <View>
                 <Text className="font-semibold text-white">User Account</Text>
                 <Text className="font-mono text-xs text-gray-400">
-                  {userKeypair.publicKey.toString().slice(0, 20)}...
+                  {publicKey.toString().slice(0, 20)}...
+                </Text>
+                <Text className="font-mono text-xs text-gray-400">
+                  Balance: {walletBalance.toFixed(4)} SOL
                 </Text>
               </View>
 
@@ -381,14 +485,14 @@ export function IntentScreen() {
                 <TouchableOpacity
                   onPress={initializeUserAccount}
                   disabled={loading}
-                  className="bg-primary rounded-lg px-4 py-2">
+                  className="rounded-lg bg-primary px-4 py-2">
                   <Text className="font-semibold text-white">
                     {loading ? 'Setting up...' : 'Activate Account'}
                   </Text>
                 </TouchableOpacity>
               ) : (
                 <View className="items-end">
-                  <Text className="text-primary font-semibold">✓ Active</Text>
+                  <Text className="font-semibold text-primary">✓ Active</Text>
                   <Text className="text-xs text-gray-400">
                     {userProfile.account.totalIntentsCreated} intents created
                   </Text>
@@ -401,11 +505,11 @@ export function IntentScreen() {
 
       {/* Tab Navigation */}
       <Animated.View entering={FadeInUp.duration(600).delay(100)} className="mb-6 px-4">
-        <View className="bg-dark-card border-dark-border relative flex-row rounded-2xl border p-2">
+        <View className="relative flex-row rounded-2xl border border-dark-border bg-dark-card p-2">
           {/* Animated Tab Indicator */}
           <Animated.View
             style={[animatedTabStyle]}
-            className="bg-primary absolute left-2 top-2 h-12 w-1/4 rounded-xl"
+            className="absolute left-2 top-2 h-12 w-1/4 rounded-xl bg-primary"
           />
 
           {intentTypes.map((type, index) => (
@@ -427,9 +531,9 @@ export function IntentScreen() {
         {/* Intent Type Description */}
         <Animated.View
           entering={SlideInRight.duration(600).delay(200)}
-          className="bg-dark-card border-dark-border mx-4 mb-6 rounded-2xl border p-6">
+          className="mx-4 mb-6 rounded-2xl border border-dark-border bg-dark-card p-6">
           <View className="mb-3 flex-row items-center">
-            <View className="bg-primary/20 mr-4 h-12 w-12 items-center justify-center rounded-full">
+            <View className="mr-4 h-12 w-12 items-center justify-center rounded-full bg-primary/20">
               <Ionicons name={intentTypes[selectedTab].icon as any} size={24} color="#FF4500" />
             </View>
             <View className="flex-1">
@@ -461,11 +565,11 @@ export function IntentScreen() {
                 <TouchableOpacity
                   key={index}
                   onPress={() => handleTemplatePress(template)}
-                  className="bg-dark-card border-dark-border mr-4 w-64 rounded-xl border p-4">
+                  className="mr-4 w-64 rounded-xl border border-dark-border bg-dark-card p-4">
                   <View className="mb-2 flex-row items-center">
-                    <Text className="text-primary mr-2 font-semibold">{template.from}</Text>
+                    <Text className="mr-2 font-semibold text-primary">{template.from}</Text>
                     <Ionicons name="arrow-forward" size={16} color="#8E8E93" />
-                    <Text className="text-primary ml-2 font-semibold">{template.to}</Text>
+                    <Text className="ml-2 font-semibold text-primary">{template.to}</Text>
                   </View>
                   <Text className="mb-1 text-sm text-gray-400">{template.description}</Text>
                   <Text className="font-medium text-white">{template.amount}</Text>
@@ -482,7 +586,7 @@ export function IntentScreen() {
           </Text>
 
           {recentIntents.length === 0 ? (
-            <View className="bg-dark-card border-dark-border items-center rounded-xl border p-6">
+            <View className="items-center rounded-xl border border-dark-border bg-dark-card p-6">
               <Ionicons name="flash-outline" size={48} color="#8E8E93" />
               <Text className="mt-4 text-center text-gray-400">
                 {!userProfile?.account
@@ -494,7 +598,7 @@ export function IntentScreen() {
             recentIntents.map((intent) => (
               <View
                 key={intent.id}
-                className="bg-dark-card border-dark-border mb-3 flex-row items-center justify-between rounded-xl border p-4">
+                className="mb-3 flex-row items-center justify-between rounded-xl border border-dark-border bg-dark-card p-4">
                 <View className="flex-1">
                   <View className="mb-1 flex-row items-center">
                     <View

@@ -25,14 +25,28 @@
       "backgroundColor": "#0A0A0A"
     },
     "assetBundlePatterns": ["**/*"],
+    "scheme": "intentify",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "LSApplicationQueriesSchemes": ["phantom"]
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#FF4500"
-      }
+      },
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "data": [
+            {
+              "scheme": "phantom"
+            }
+          ]
+        }
+      ]
     }
   }
 }

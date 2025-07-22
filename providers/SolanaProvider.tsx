@@ -3,6 +3,8 @@ import { Connection, PublicKey, LAMPORTS_PER_SOL, clusterApiUrl } from '@solana/
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 
+import { usePhantomWallet } from './PhantomProvider';
+
 import {
   IntentExecutor,
   createIntentExecutor,
@@ -79,10 +81,55 @@ export function SolanaProvider({ children }: SolanaProviderProps) {
   const [activeIntents, setActiveIntents] = useState<ActiveIntent[]>([]);
   const [intentExecutor, setIntentExecutor] = useState<IntentExecutor | null>(null);
 
+  // Get Phantom wallet state
+  const { isLoggedIn: phantomLoggedIn, solanaPublicKey: phantomPublicKey } = usePhantomWallet();
+
   // Check for existing connection on app start
   useEffect(() => {
     checkExistingConnection();
   }, []);
+
+  // Auto-connect when Phantom wallet is connected
+  useEffect(() => {
+    console.log('🔍 Phantom state change:', {
+      phantomLoggedIn,
+      phantomPublicKey: phantomPublicKey?.toString(),
+      connected,
+    });
+
+    if (phantomLoggedIn && phantomPublicKey && !connected) {
+      console.log('✅ Phantom wallet detected, auto-connecting...');
+      console.log('🔗 Setting SolanaProvider state:', {
+        publicKey: phantomPublicKey.toString(),
+        connected: true,
+      });
+      setPublicKey(phantomPublicKey);
+      setConnected(true);
+      // Save phantom connection
+      AsyncStorage.setItem('connected_wallet', phantomPublicKey.toString());
+      AsyncStorage.setItem('wallet_type', 'phantom');
+      refreshBalances();
+      if (Haptics?.impactAsync) {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      }
+      console.log('✅ SolanaProvider connection completed');
+    } else if (!phantomLoggedIn && connected) {
+      // If Phantom disconnects, check if we should disconnect too
+      AsyncStorage.getItem('wallet_type').then((type) => {
+        if (type === 'phantom') {
+          console.log('👋 Phantom disconnected, logging out...');
+          disconnectWallet();
+        }
+      });
+    } else {
+      console.log('🔍 SolanaProvider auto-connect conditions not met:', {
+        phantomLoggedIn,
+        phantomPublicKey: phantomPublicKey?.toString(),
+        connected,
+        shouldConnect: phantomLoggedIn && phantomPublicKey && !connected,
+      });
+    }
+  }, [phantomLoggedIn, phantomPublicKey, connected]);
 
   // Initialize intent executor when wallet connects
   useEffect(() => {

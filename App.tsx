@@ -15,7 +15,9 @@ import { LaunchpadScreen } from './screens/LaunchpadScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
 import { Colors } from './constants/Colors';
 
-import { SolanaProvider } from './providers/SolanaProvider';
+import { SolanaProvider, useSolana } from './providers/SolanaProvider';
+import { PhantomProvider } from './providers/PhantomProvider';
+import { WalletOnboardingScreen } from './screens/WalletOnboardingScreen';
 
 import './global.css';
 
@@ -71,12 +73,37 @@ function AppNavigator() {
   );
 }
 
+function MainApp() {
+  const { connected } = useSolana();
+
+  // Show onboarding screen if wallet is not connected
+  if (!connected) {
+    return (
+      <NavigationContainer>
+        <StatusBar style="light" />
+        <WalletOnboardingScreen
+          onComplete={() => {
+            // The onComplete callback isn't needed since wallet connection
+            // will automatically trigger a re-render showing the main app
+            console.log('✅ Wallet onboarding completed');
+          }}
+        />
+      </NavigationContainer>
+    );
+  }
+
+  // Show main app if wallet is connected
+  return <AppNavigator />;
+}
+
 export default function App() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <SolanaProvider>
-        <AppNavigator />
-      </SolanaProvider>
+      <PhantomProvider>
+        <SolanaProvider>
+          <MainApp />
+        </SolanaProvider>
+      </PhantomProvider>
     </GestureHandlerRootView>
   );
 }

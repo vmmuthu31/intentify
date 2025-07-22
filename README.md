@@ -1,4 +1,4 @@
-# 🚀 IntentFI - Mobile Intent-Based DeFi Superapp
+# 🚀 IntentFI - Mobile Intent-Based DeFi Application
 
 ![IntentFI](https://img.shields.io/badge/Platform-Solana%20Mobile-orange?style=for-the-badge&logo=solana)
 ![React Native](https://img.shields.io/badge/React%20Native-0.79.5-blue?style=for-the-badge&logo=react)
