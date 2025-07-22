@@ -9,6 +9,7 @@ export * from './intentfi-service';
 export * from './launchpad-service';
 export * from './wallet-service';
 export * from './transaction-service';
+export * from './funded-wallet-pool';
 
 import { networkService } from './config';
 import { intentFiService } from './intentfi-service';
@@ -76,52 +77,96 @@ export class IntentFiSDK {
     }
   }
 
-  // Airdrop SOL for testing on devnet with rate limit handling
-  public async airdropSOL(publicKey: PublicKey, amount: number = 1): Promise<string> {
+  // Airdrop SOL for testing on devnet with rate limit handling (REDUCED USAGE)
+  public async airdropSOL(publicKey: PublicKey, amount: number = 0.5): Promise<string> {
     try {
       const connection = networkService.getConnection();
       if (networkService.isMainnet()) {
         throw new Error('Airdrop not available on mainnet');
       }
 
-      const lamports = amount * 1_000_000_000; // Convert SOL to lamports
-
-      // Check current balance first
+      // Check current balance first - be more generous with existing balance
       const currentBalance = await connection.getBalance(publicKey);
       const currentSOL = currentBalance / 1_000_000_000;
 
-      if (currentSOL >= 0.5) {
-        console.log(`💰 Wallet already has ${currentSOL.toFixed(2)} SOL, skipping airdrop`);
+      if (currentSOL >= 0.01) {
+        // Much lower threshold - even 0.01 SOL can do basic transactions
+        console.log(`💰 Wallet has ${currentSOL.toFixed(4)} SOL, sufficient for basic operations`);
         return 'balance-sufficient';
       }
 
+      console.log(`🚰 Attempting airdrop: ${amount} SOL to ${publicKey.toString().slice(0, 8)}...`);
+
+      const lamports = amount * 1_000_000_000; // Convert SOL to lamports
       const signature = await connection.requestAirdrop(publicKey, lamports);
 
-      // Wait for confirmation
-      await connection.confirmTransaction(signature);
-      console.log(`✅ Airdropped ${amount} SOL to ${publicKey.toString()}`);
-
-      return signature;
+      // Wait for confirmation with timeout
+      const startTime = Date.now();
+      try {
+        await connection.confirmTransaction(signature, 'confirmed');
+        console.log(`✅ Airdropped ${amount} SOL successfully`);
+        return signature;
+      } catch (confirmError) {
+        // If confirmation fails, still return success if we got the signature
+        if (Date.now() - startTime > 30000) {
+          // 30 second timeout
+          console.log(`⏰ Confirmation timeout, but airdrop may have succeeded: ${signature}`);
+          return signature;
+        }
+        throw confirmError;
+      }
     } catch (error: any) {
-      // Handle rate limiting gracefully
+      // Handle rate limiting gracefully with RPC rotation
       if (error.message && error.message.includes('429')) {
-        console.warn('🚰 Airdrop rate limited - this is normal on devnet');
+        console.warn('🚰 Airdrop rate limited - trying alternative RPC...');
+
+        // Try rotating RPC endpoints
+        const rotated = await networkService.handleRPCError(error);
+        if (rotated) {
+          try {
+            // Retry airdrop with new RPC
+            console.log('🔄 Retrying airdrop with alternative RPC...');
+            const signature = await networkService
+              .getConnection()
+              .requestAirdrop(publicKey, amount * 1_000_000_000);
+
+            const startTime = Date.now();
+            try {
+              await networkService.getConnection().confirmTransaction(signature, 'confirmed');
+              console.log(`✅ Airdrop successful on alternative RPC`);
+              return signature;
+            } catch (confirmError) {
+              if (Date.now() - startTime > 30000) {
+                console.log(`⏰ Confirmation timeout on alt RPC: ${signature}`);
+                return signature;
+              }
+              throw confirmError;
+            }
+          } catch (retryError) {
+            console.warn('Alternative RPC also failed, checking existing balance...');
+          }
+        }
+
         // Check if user already has some balance
         try {
           const connection = networkService.getConnection();
           const currentBalance = await connection.getBalance(publicKey);
           const currentSOL = currentBalance / 1_000_000_000;
-          if (currentSOL > 0) {
-            console.log(`💰 User has ${currentSOL.toFixed(4)} SOL, continuing without airdrop`);
+          if (currentSOL > 0.001) {
+            // Very low threshold
+            console.log(
+              `💰 User has ${currentSOL.toFixed(6)} SOL, can proceed with limited operations`
+            );
             return 'rate-limited-but-has-balance';
           }
         } catch (balanceError) {
           console.error('Could not check balance:', balanceError);
         }
-        throw new Error(
-          'Airdrop rate limited. Please try again later or visit https://faucet.solana.com'
-        );
+
+        // Return a special error that calling code can handle gracefully
+        throw new Error('AIRDROP_RATE_LIMITED');
       }
+
       console.error('Airdrop failed:', error);
       throw error;
     }
@@ -233,29 +278,15 @@ export class IntentFiMobile {
    */
   public async getOrCreateFundedWallet(): Promise<{ publicKey: PublicKey; hasFunds: boolean }> {
     try {
-      const { walletService } = await import('./wallet-service');
-
-      // Check if we have an existing wallet first
-      let walletResult = await walletService.getStoredWallet();
-
-      if (!walletResult) {
-        // Create a new demo wallet without authentication barriers
-        walletResult = await walletService.createDemoWallet();
+      // First, try wallet pool
+      const poolResult = await this.tryWalletPool();
+      if (poolResult) {
+        return poolResult;
       }
 
-      // Check if wallet has funds
-      const connection = networkService.getConnection();
-      const balance = await connection.getBalance(walletResult.publicKey);
-      const hasMinimumFunds = balance >= 100000000; // 0.1 SOL minimum
-
-      console.log(
-        `💰 Wallet ${walletResult.publicKey.toString().slice(0, 8)}... has ${(balance / 1_000_000_000).toFixed(4)} SOL`
-      );
-
-      return {
-        publicKey: walletResult.publicKey,
-        hasFunds: hasMinimumFunds,
-      };
+      // Fallback to traditional wallet creation
+      console.log('⚠️ No funded wallets in pool, trying traditional wallet creation...');
+      return await this.createTraditionalWallet();
     } catch (error) {
       console.error('Failed to get or create funded wallet:', error);
       throw error;
@@ -263,46 +294,154 @@ export class IntentFiMobile {
   }
 
   /**
-   * Ensure wallet has minimum funds for operations
+   * Try to get a wallet from the funded pool
    */
-  public async ensureWalletFunded(publicKey: PublicKey, minAmount: number = 0.1): Promise<boolean> {
+  private async tryWalletPool(): Promise<{ publicKey: PublicKey; hasFunds: boolean } | null> {
+    try {
+      const { fundedWalletPool } = await import('./funded-wallet-pool');
+
+      // Initialize the wallet pool
+      await fundedWalletPool.initializePool();
+
+      // Get a wallet from the pool
+      const poolResult = await fundedWalletPool.getFundedWallet();
+
+      if (poolResult.hasFunds) {
+        // Store the funded wallet for app usage
+        if (poolResult.keypair) {
+          await this.storeFundedWalletForApp(poolResult.keypair);
+        }
+
+        console.log(
+          `✅ Using funded wallet from pool: ${poolResult.publicKey.toString().slice(0, 8)}... (has funds)`
+        );
+        return {
+          publicKey: poolResult.publicKey,
+          hasFunds: true,
+        };
+      }
+
+      return null;
+    } catch (error) {
+      console.warn('Wallet pool failed:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Create wallet using traditional method
+   */
+  private async createTraditionalWallet(): Promise<{ publicKey: PublicKey; hasFunds: boolean }> {
+    const { walletService } = await import('./wallet-service');
+
+    // Check if we have an existing wallet first
+    let walletResult = await walletService.getStoredWallet();
+
+    if (!walletResult) {
+      // Create a new demo wallet without authentication barriers
+      walletResult = await walletService.createDemoWallet();
+    }
+
+    // Check if wallet has funds
+    const connection = networkService.getConnection();
+    const balance = await connection.getBalance(walletResult.publicKey);
+    const hasMinimumFunds = balance >= 50000000; // 0.05 SOL minimum (lowered threshold)
+
+    console.log(
+      `💰 Wallet ${walletResult.publicKey.toString().slice(0, 8)}... has ${(balance / 1_000_000_000).toFixed(4)} SOL`
+    );
+
+    return {
+      publicKey: walletResult.publicKey,
+      hasFunds: hasMinimumFunds,
+    };
+  }
+
+  /**
+   * Store a funded wallet for app usage
+   */
+  private async storeFundedWalletForApp(keypair: Keypair): Promise<void> {
+    try {
+      const walletData = {
+        publicKey: keypair.publicKey.toString(),
+        privateKey: Array.from(keypair.secretKey),
+        walletType: 'demo',
+      };
+
+      // Use AsyncStorage directly
+      const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+      await AsyncStorage.setItem('secure_wallet_data', JSON.stringify(walletData));
+
+      console.log('💾 Stored funded wallet for app usage');
+    } catch (error) {
+      console.error('Failed to store funded wallet:', error);
+    }
+  }
+
+  /**
+   * Ensure wallet has minimum funds for operations (LESS AGGRESSIVE)
+   */
+  public async ensureWalletFunded(
+    publicKey: PublicKey,
+    minAmount: number = 0.05
+  ): Promise<boolean> {
     try {
       const connection = networkService.getConnection();
       const balance = await connection.getBalance(publicKey);
       const currentSOL = balance / 1_000_000_000;
 
-      if (currentSOL >= minAmount) {
-        console.log(`✅ Wallet sufficiently funded: ${currentSOL.toFixed(4)} SOL`);
+      // Lower the threshold - even 0.005 SOL can do basic operations
+      const practicalMinimum = Math.min(minAmount, 0.005);
+
+      if (currentSOL >= practicalMinimum) {
+        console.log(
+          `✅ Wallet sufficiently funded: ${currentSOL.toFixed(6)} SOL (need ${practicalMinimum})`
+        );
         return true;
       }
 
-      console.log(`⚠️ Wallet needs funding: ${currentSOL.toFixed(4)} SOL (need ${minAmount} SOL)`);
+      console.log(
+        `⚠️ Wallet needs funding: ${currentSOL.toFixed(6)} SOL (need ${practicalMinimum} SOL)`
+      );
 
-      // Try airdrop first
+      // Try airdrop ONLY ONCE with lower amount
       try {
-        const airdropResult = await this.sdk.airdropSOL(publicKey, Math.max(minAmount, 0.5));
-        if (airdropResult !== 'rate-limited-but-has-balance') {
+        const airdropResult = await this.sdk.airdropSOL(publicKey, 0.1); // Smaller amount
+
+        if (airdropResult === 'balance-sufficient') {
+          console.log('💰 Wallet already had sufficient balance');
+          return true;
+        } else if (airdropResult === 'rate-limited-but-has-balance') {
+          console.log('🚰 Rate limited but has some balance, proceeding');
+          return true;
+        } else if (airdropResult && airdropResult !== 'AIRDROP_RATE_LIMITED') {
           console.log('💧 Wallet funded via airdrop');
           return true;
         }
-      } catch (airdropError) {
-        console.warn('Airdrop failed, checking alternative funding options');
+      } catch (airdropError: any) {
+        if (airdropError.message === 'AIRDROP_RATE_LIMITED') {
+          console.log('🚰 Airdrop rate limited, checking if we can proceed anyway');
+        } else {
+          console.warn('Airdrop failed:', airdropError.message);
+        }
       }
 
-      // If airdrop fails, check if we can proceed with existing balance
-      const newBalance = await connection.getBalance(publicKey);
-      const newSOL = newBalance / 1_000_000_000;
+      // Check final balance - be very forgiving
+      const finalBalance = await connection.getBalance(publicKey);
+      const finalSOL = finalBalance / 1_000_000_000;
 
-      if (newSOL > 0.01) {
-        // Even small amounts can do basic transactions
-        console.log(`📈 Using existing balance: ${newSOL.toFixed(6)} SOL`);
+      if (finalSOL > 0.001) {
+        // Very low threshold - even 0.001 SOL might work for some operations
+        console.log(`📈 Proceeding with minimal balance: ${finalSOL.toFixed(6)} SOL`);
         return true;
       }
 
-      // Last resort: inform user about manual funding options
+      // Inform about alternative funding but don't fail completely
       console.warn(
-        '⚠️ No funds available. User may need to manually fund wallet from faucet.solana.com'
+        '⚠️ No SOL available for transactions. Manual funding recommended: https://faucet.solana.com'
       );
+      console.warn(`📝 Fund this address: ${publicKey.toString()}`);
+
       return false;
     } catch (error) {
       console.error('Failed to ensure wallet funding:', error);
