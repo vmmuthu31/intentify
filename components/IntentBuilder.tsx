@@ -11,20 +11,12 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withSpring,
-  withTiming,
-  FadeInUp,
-  SlideInRight,
-  BounceIn,
-} from 'react-native-reanimated';
+import Animated, { FadeInUp, SlideInRight, BounceIn } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 
 import { AnimatedButton } from './AnimatedButton';
-
-const { width } = Dimensions.get('window');
+import { useSolana } from '../providers/SolanaProvider';
+import { calculateProtocolFee } from '../contracts/IntentExecutor';
 
 interface Token {
   symbol: string;
@@ -42,9 +34,11 @@ interface IntentBuilderProps {
 }
 
 export function IntentBuilder({ intentType, onClose, onCreateIntent }: IntentBuilderProps) {
+  const { tokenBalances, executeSwapIntent, executeLendIntent, executeBuyIntent } = useSolana();
   const [fromToken, setFromToken] = useState<Token | null>(null);
   const [toToken, setToToken] = useState<Token | null>(null);
   const [amount, setAmount] = useState('');
+  const [executing, setExecuting] = useState(false);
   const [conditions, setConditions] = useState({
     maxSlippage: '0.5',
     minPrice: '',
@@ -53,14 +47,14 @@ export function IntentBuilder({ intentType, onClose, onCreateIntent }: IntentBui
   });
   const [rugproofEnabled, setRugproofEnabled] = useState(true);
 
-  const popularTokens: Token[] = [
-    { symbol: 'SOL', name: 'Solana', balance: '45.2', price: '$189.50', rugScore: 98 },
-    { symbol: 'USDC', name: 'USD Coin', balance: '2,150.00', price: '$1.00', rugScore: 100 },
-    { symbol: 'BONK', name: 'Bonk', balance: '1,250,000', price: '$0.0009', rugScore: 85 },
-    { symbol: 'mSOL', name: 'Marinade SOL', balance: '8.7', price: '$189.91', rugScore: 96 },
-    { symbol: 'RAY', name: 'Raydium', balance: '125.5', price: '$2.34', rugScore: 92 },
-    { symbol: 'ORCA', name: 'Orca', balance: '67.8', price: '$3.45', rugScore: 94 },
-  ];
+  // Convert tokenBalances to Token interface
+  const availableTokens: Token[] = tokenBalances.map((token) => ({
+    symbol: token.symbol,
+    name: token.symbol,
+    balance: token.uiAmount.toString(),
+    price: `$${token.price?.toFixed(token.symbol === 'BONK' ? 6 : 2) || '0.00'}`,
+    rugScore: token.symbol === 'SOL' ? 98 : token.symbol === 'USDC' ? 100 : 85,
+  }));
 
   const getRugScoreColor = (score: number) => {
     if (score >= 90) return '#00D4AA';
@@ -77,24 +71,109 @@ export function IntentBuilder({ intentType, onClose, onCreateIntent }: IntentBui
     }
   };
 
-  const handleCreateIntent = () => {
+  const handleCreateIntent = async () => {
     if (!fromToken || !toToken || !amount) {
       Alert.alert('Missing Information', 'Please fill in all required fields');
       return;
     }
 
-    const intentData = {
-      type: intentType,
-      fromToken,
-      toToken,
-      amount,
-      conditions,
-      rugproofEnabled,
-      createdAt: new Date().toISOString(),
-    };
+    const numericAmount = parseFloat(amount);
+    if (isNaN(numericAmount) || numericAmount <= 0) {
+      Alert.alert('Invalid Amount', 'Please enter a valid amount');
+      return;
+    }
 
+    setExecuting(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    onCreateIntent(intentData);
+
+    try {
+      let txId = '';
+      const protocolFee = calculateProtocolFee(numericAmount);
+      const netAmount = numericAmount - protocolFee;
+
+      console.log(`🚀 Creating ${intentType} intent:`);
+      console.log(`📊 Amount: ${numericAmount} ${fromToken.symbol}`);
+      console.log(`💰 Protocol Fee (0.3%): ${protocolFee} ${fromToken.symbol}`);
+      console.log(`💎 Net Amount: ${netAmount} ${fromToken.symbol}`);
+
+      if (intentType === 'swap') {
+        txId = await executeSwapIntent({
+          fromMint: fromToken.symbol,
+          toMint: toToken.symbol,
+          amount: numericAmount,
+          maxSlippage: parseFloat(conditions.maxSlippage),
+          rugproofEnabled,
+        });
+
+        Alert.alert(
+          'Swap Intent Created! 🎉',
+          `Successfully created swap intent:\n\n` +
+            `• ${netAmount.toFixed(4)} ${fromToken.symbol} → ${toToken.symbol}\n` +
+            `• Protocol Fee: ${protocolFee.toFixed(4)} ${fromToken.symbol} (0.3%)\n` +
+            `• Rugproof: ${rugproofEnabled ? 'Enabled' : 'Disabled'}\n` +
+            `• Transaction: ${txId.slice(0, 8)}...`,
+          [{ text: 'Great!', onPress: () => onClose() }]
+        );
+      } else if (intentType === 'lend') {
+        const minApy = 8.0; // Default minimum APY
+
+        txId = await executeLendIntent({
+          mint: fromToken.symbol,
+          amount: numericAmount,
+          minApy,
+        });
+
+        Alert.alert(
+          'Lend Intent Created! 🏦',
+          `Successfully created lending intent:\n\n` +
+            `• ${netAmount.toFixed(4)} ${fromToken.symbol}\n` +
+            `• Min APY: ${minApy}%\n` +
+            `• Protocol Fee: ${protocolFee.toFixed(4)} ${fromToken.symbol} (0.3%)\n` +
+            `• Transaction: ${txId.slice(0, 8)}...`,
+          [{ text: 'Excellent!', onPress: () => onClose() }]
+        );
+      } else if (intentType === 'buy') {
+        const usdcAmount = numericAmount; // Assuming amount is in USDC
+
+        txId = await executeBuyIntent({
+          mint: toToken.symbol,
+          usdcAmount,
+          maxPriceImpact: parseFloat(conditions.maxSlippage),
+          rugproofCheck: rugproofEnabled,
+        });
+
+        Alert.alert(
+          'Buy Intent Created! 💳',
+          `Successfully created buy intent:\n\n` +
+            `• Buy ${toToken.symbol} with $${netAmount.toFixed(2)}\n` +
+            `• Protocol Fee: $${protocolFee.toFixed(2)} (0.3%)\n` +
+            `• Rugproof: ${rugproofEnabled ? 'Enabled' : 'Disabled'}\n` +
+            `• Transaction: ${txId.slice(0, 8)}...`,
+          [{ text: 'Awesome!', onPress: () => onClose() }]
+        );
+      }
+
+      // Call the callback with intent data
+      onCreateIntent({
+        type: intentType,
+        fromToken,
+        toToken,
+        amount: numericAmount,
+        conditions,
+        rugproofEnabled,
+        txId,
+        createdAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      console.error('❌ Intent execution failed:', errorMessage);
+
+      Alert.alert('Intent Failed', `Failed to execute ${intentType} intent:\n\n${errorMessage}`, [
+        { text: 'Try Again' },
+      ]);
+    } finally {
+      setExecuting(false);
+    }
   };
 
   const renderTokenSelector = (title: string, selectedToken: Token | null, type: 'from' | 'to') => (
@@ -135,7 +214,7 @@ export function IntentBuilder({ intentType, onClose, onCreateIntent }: IntentBui
       ) : (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} className="mb-2">
           <View className="flex-row space-x-3">
-            {popularTokens.map((token, index) => (
+            {availableTokens.map((token, index) => (
               <Animated.View key={token.symbol} entering={BounceIn.duration(400).delay(index * 50)}>
                 <TouchableOpacity
                   onPress={() => handleTokenSelect(token, type)}
@@ -165,6 +244,21 @@ export function IntentBuilder({ intentType, onClose, onCreateIntent }: IntentBui
     </Animated.View>
   );
 
+  const estimatedOutput = () => {
+    if (!amount || !fromToken || !toToken) return '0.00';
+
+    const numericAmount = parseFloat(amount);
+    const protocolFee = calculateProtocolFee(numericAmount);
+    const netAmount = numericAmount - protocolFee;
+
+    // Mock exchange rate calculation
+    const fromPrice = parseFloat(fromToken.price.replace('$', ''));
+    const toPrice = parseFloat(toToken.price.replace('$', ''));
+    const estimatedTokens = (netAmount * fromPrice) / toPrice;
+
+    return estimatedTokens.toFixed(6);
+  };
+
   return (
     <SafeAreaView className="bg-dark-bg flex-1">
       {/* Header */}
@@ -175,7 +269,7 @@ export function IntentBuilder({ intentType, onClose, onCreateIntent }: IntentBui
           <Text className="text-xl font-bold text-white">
             Create {intentType.charAt(0).toUpperCase() + intentType.slice(1)} Intent
           </Text>
-          <Text className="text-dark-gray text-sm">Build your automated trading strategy</Text>
+          <Text className="text-dark-gray text-sm">Execute with 0.3% protocol fee</Text>
         </View>
         <TouchableOpacity onPress={onClose} className="p-2">
           <Ionicons name="close" size={24} color="#8E8E93" />
@@ -187,24 +281,29 @@ export function IntentBuilder({ intentType, onClose, onCreateIntent }: IntentBui
         {renderTokenSelector('From Token', fromToken, 'from')}
 
         {/* Swap Arrow */}
-        <Animated.View entering={FadeInUp.duration(400)} className="mb-6 items-center">
-          <TouchableOpacity
-            onPress={() => {
-              const temp = fromToken;
-              setFromToken(toToken);
-              setToToken(temp);
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            }}
-            className="bg-primary/20 rounded-full p-3">
-            <Ionicons name="arrow-down" size={20} color="#FF4500" />
-          </TouchableOpacity>
-        </Animated.View>
+        {intentType === 'swap' && (
+          <Animated.View entering={FadeInUp.duration(400)} className="mb-6 items-center">
+            <TouchableOpacity
+              onPress={() => {
+                const temp = fromToken;
+                setFromToken(toToken);
+                setToToken(temp);
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              }}
+              className="bg-primary/20 rounded-full p-3">
+              <Ionicons name="arrow-down" size={20} color="#FF4500" />
+            </TouchableOpacity>
+          </Animated.View>
+        )}
 
-        {renderTokenSelector('To Token', toToken, 'to')}
+        {(intentType === 'swap' || intentType === 'buy') &&
+          renderTokenSelector('To Token', toToken, 'to')}
 
         {/* Amount Input */}
         <Animated.View entering={FadeInUp.duration(400)} className="mb-6">
-          <Text className="mb-3 text-base font-semibold text-white">Amount</Text>
+          <Text className="mb-3 text-base font-semibold text-white">
+            Amount {intentType === 'buy' ? '(USD)' : fromToken ? `(${fromToken.symbol})` : ''}
+          </Text>
           <View className="bg-dark-card border-dark-border rounded-2xl border p-4">
             <TextInput
               value={amount}
@@ -221,6 +320,29 @@ export function IntentBuilder({ intentType, onClose, onCreateIntent }: IntentBui
             )}
           </View>
         </Animated.View>
+
+        {/* Protocol Fee Display */}
+        {amount && (
+          <Animated.View entering={FadeInUp.duration(400)} className="mb-6">
+            <View className="bg-primary/10 border-primary/30 rounded-2xl border p-4">
+              <View className="mb-2 flex-row items-center justify-between">
+                <Text className="text-primary font-semibold">Protocol Fee (0.3%)</Text>
+                <Ionicons name="information-circle" size={16} color="#FF4500" />
+              </View>
+              <Text className="text-lg font-bold text-white">
+                {calculateProtocolFee(parseFloat(amount) || 0).toFixed(6)}{' '}
+                {fromToken?.symbol || 'tokens'}
+              </Text>
+              <Text className="text-dark-gray mt-1 text-sm">
+                Net amount:{' '}
+                {(
+                  (parseFloat(amount) || 0) - calculateProtocolFee(parseFloat(amount) || 0)
+                ).toFixed(6)}{' '}
+                {fromToken?.symbol || 'tokens'}
+              </Text>
+            </View>
+          </Animated.View>
+        )}
 
         {/* Advanced Conditions */}
         <Animated.View entering={SlideInRight.duration(400)} className="mb-6">
@@ -284,15 +406,15 @@ export function IntentBuilder({ intentType, onClose, onCreateIntent }: IntentBui
             end={{ x: 1, y: 1 }}
             className="border-dark-border rounded-2xl border p-4">
             <View className="mb-2 flex-row items-center justify-between">
-              <Text className="text-dark-gray">You&apos;ll receive approximately</Text>
+              <Text className="text-dark-gray">You will receive approximately</Text>
               <Ionicons name="information-circle-outline" size={16} color="#8E8E93" />
             </View>
             <Text className="text-2xl font-bold text-white">
-              {amount && toToken
-                ? `~${(parseFloat(amount) * 189.5).toFixed(2)} ${toToken.symbol}`
-                : '0.00'}
+              {estimatedOutput()} {toToken?.symbol || 'tokens'}
             </Text>
-            <Text className="text-dark-gray mt-1 text-sm">Best route via Jupiter Aggregator</Text>
+            <Text className="text-dark-gray mt-1 text-sm">
+              Route via Jupiter Aggregator + 0.3% fee
+            </Text>
           </LinearGradient>
         </Animated.View>
       </ScrollView>
@@ -300,10 +422,16 @@ export function IntentBuilder({ intentType, onClose, onCreateIntent }: IntentBui
       {/* Create Button */}
       <View className="border-dark-border border-t p-4">
         <AnimatedButton
-          title={`Create ${intentType.charAt(0).toUpperCase() + intentType.slice(1)} Intent`}
+          title={
+            executing
+              ? 'Executing...'
+              : `Create ${intentType.charAt(0).toUpperCase() + intentType.slice(1)} Intent`
+          }
           onPress={handleCreateIntent}
           variant="primary"
           size="large"
+          disabled={executing}
+          loading={executing}
         />
       </View>
     </SafeAreaView>

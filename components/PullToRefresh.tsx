@@ -1,13 +1,5 @@
 import React, { useState, useCallback } from 'react';
-import { View, RefreshControl, ScrollView } from 'react-native';
-import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withSpring,
-  interpolate,
-  Extrapolate,
-} from 'react-native-reanimated';
-import { Ionicons } from '@expo/vector-icons';
+import { RefreshControl, ScrollView } from 'react-native';
 
 interface PullToRefreshProps {
   children: React.ReactNode;

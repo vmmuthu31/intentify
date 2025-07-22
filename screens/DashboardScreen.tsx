@@ -1,5 +1,5 @@
-import React from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Dimensions, Alert } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, Dimensions, Alert, Modal } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -10,13 +10,34 @@ import * as Haptics from 'expo-haptics';
 import { SwipeableCard } from '../components/SwipeableCard';
 import { AnimatedButton } from '../components/AnimatedButton';
 import { PullToRefresh } from '../components/PullToRefresh';
+import { WalletOnboardingScreen } from './WalletOnboardingScreen';
+import { useSolana } from '../providers/SolanaProvider';
 
 const { width } = Dimensions.get('window');
 
 export function DashboardScreen() {
-  const balance = '$12,486.73';
-  const pnl = '+$1,234.56';
-  const pnlPercentage = '+8.4%';
+  const {
+    connected,
+    connecting,
+    balance,
+    tokenBalances,
+    publicKey,
+    refreshBalances,
+    connectWallet,
+  } = useSolana();
+
+  const [showOnboarding, setShowOnboarding] = useState(!connected);
+
+  // Update onboarding visibility when connection status changes
+  useEffect(() => {
+    setShowOnboarding(!connected);
+  }, [connected]);
+
+  const getTotalPortfolioValue = () => {
+    return tokenBalances.reduce((total, token) => {
+      return total + token.uiAmount * (token.price || 0);
+    }, 0);
+  };
 
   const quickActions = [
     { id: 1, title: 'Swap', icon: 'swap-horizontal', color: '#FF4500' },
@@ -29,25 +50,30 @@ export function DashboardScreen() {
     {
       id: 1,
       type: 'Swap',
-      description: 'Swap 10 SOL → USDC',
+      description: 'Swap 10 SOL → USDC when price > $195',
       status: 'pending',
-      value: '$1,890',
+      value: '$1,950',
     },
     {
       id: 2,
       type: 'Lend',
-      description: 'Lend 500 USDC at 8.2% APY',
+      description: 'Lend 500 USDC at 8.2% APY on Solend',
       status: 'active',
       value: '$500',
     },
   ];
 
   const handleRefresh = async () => {
-    await new Promise((resolve) => setTimeout(resolve, 1000)); // Simulate API call
+    if (!connected) return;
+    await refreshBalances();
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   };
 
   const handleQuickAction = (action: any) => {
+    if (!connected) {
+      Alert.alert('Wallet Required', 'Please connect your wallet first');
+      return;
+    }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     Alert.alert('Quick Action', `Opening ${action.title}...`);
   };
@@ -55,6 +81,19 @@ export function DashboardScreen() {
   const handleIntentAction = (intent: any, action: string) => {
     Alert.alert('Intent Action', `${action} intent: ${intent.description}`);
   };
+
+  // Show onboarding if not connected
+  if (showOnboarding) {
+    return (
+      <Modal visible={true} animationType="slide" presentationStyle="fullScreen">
+        <WalletOnboardingScreen onComplete={() => setShowOnboarding(false)} />
+      </Modal>
+    );
+  }
+
+  const portfolioValue = getTotalPortfolioValue();
+  const portfolioChange = '+$1,234.56'; // Mock for now
+  const portfolioChangePercent = '+8.4%';
 
   return (
     <SafeAreaView className="bg-dark-bg flex-1">
@@ -67,9 +106,18 @@ export function DashboardScreen() {
             <Text className="text-dark-gray text-sm">Welcome back</Text>
             <Text className="text-xl font-bold text-white">IntentFI</Text>
           </View>
-          <TouchableOpacity className="p-2">
-            <Ionicons name="notifications-outline" size={24} color="#8E8E93" />
-          </TouchableOpacity>
+          <View className="flex-row items-center">
+            {connected && (
+              <View className="bg-success/20 mr-3 rounded-full px-3 py-1">
+                <Text className="text-success text-xs font-medium">
+                  {publicKey?.toString().slice(0, 4)}...{publicKey?.toString().slice(-4)}
+                </Text>
+              </View>
+            )}
+            <TouchableOpacity className="p-2">
+              <Ionicons name="notifications-outline" size={24} color="#8E8E93" />
+            </TouchableOpacity>
+          </View>
         </Animated.View>
 
         {/* Balance Card */}
@@ -85,13 +133,52 @@ export function DashboardScreen() {
                 <Ionicons name="eye-outline" size={20} color="rgba(255,255,255,0.8)" />
               </TouchableOpacity>
             </View>
-            <Text className="mb-2 text-3xl font-bold text-white">{balance}</Text>
+            <Text className="mb-2 text-3xl font-bold text-white">
+              $
+              {portfolioValue.toLocaleString('en-US', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })}
+            </Text>
             <View className="flex-row items-center">
               <Ionicons name="trending-up" size={16} color="#00D4AA" />
-              <Text className="text-success ml-1 text-sm">{pnl}</Text>
-              <Text className="text-success ml-2 text-sm">({pnlPercentage})</Text>
+              <Text className="text-success ml-1 text-sm">{portfolioChange}</Text>
+              <Text className="text-success ml-2 text-sm">({portfolioChangePercent})</Text>
             </View>
           </LinearGradient>
+        </Animated.View>
+
+        {/* Top Holdings */}
+        <Animated.View entering={FadeInUp.duration(600).delay(150)} className="mb-6 px-4">
+          <Text className="mb-4 text-lg font-semibold text-white">Top Holdings</Text>
+          <View className="flex-row space-x-3">
+            {tokenBalances.slice(0, 4).map((token, index) => (
+              <Animated.View
+                key={token.mint}
+                entering={BounceIn.duration(400).delay(index * 100)}
+                className="bg-dark-card border-dark-border flex-1 rounded-2xl border p-3">
+                <View className="items-center">
+                  <View className="bg-primary/20 mb-2 h-10 w-10 items-center justify-center rounded-full">
+                    <Text className="text-primary text-xs font-bold">{token.symbol}</Text>
+                  </View>
+                  <Text className="text-sm font-medium text-white">{token.symbol}</Text>
+                  <Text className="text-dark-gray text-xs">
+                    {token.uiAmount.toLocaleString('en-US', {
+                      minimumFractionDigits: 0,
+                      maximumFractionDigits: token.symbol === 'SOL' ? 3 : 0,
+                    })}
+                  </Text>
+                  <Text className="text-xs font-semibold text-white">
+                    $
+                    {(token.uiAmount * (token.price || 0)).toLocaleString('en-US', {
+                      minimumFractionDigits: 0,
+                      maximumFractionDigits: 0,
+                    })}
+                  </Text>
+                </View>
+              </Animated.View>
+            ))}
+          </View>
         </Animated.View>
 
         {/* Quick Actions */}
