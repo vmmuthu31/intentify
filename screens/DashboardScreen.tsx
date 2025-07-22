@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Dimensions, Alert, Modal } from 'react-native';
+import { View, Text, TouchableOpacity, Dimensions, Alert, Modal } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -10,26 +10,15 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Import our custom components
 import { SwipeableCard } from '../components/SwipeableCard';
-import { AnimatedButton } from '../components/AnimatedButton';
 import { PullToRefresh } from '../components/PullToRefresh';
 import { WalletOnboardingScreen } from './WalletOnboardingScreen';
 import { useSolana } from '../providers/SolanaProvider';
 
 // Import IntentFI services
-import { intentFiMobile, networkService, walletService } from '../services';
-
-const { width } = Dimensions.get('window');
+import { intentFiMobile, networkService } from '../services';
 
 export function DashboardScreen() {
-  const {
-    connected,
-    connecting,
-    balance,
-    tokenBalances,
-    publicKey,
-    refreshBalances,
-    connectWallet,
-  } = useSolana();
+  const { connected, balance, tokenBalances, publicKey, refreshBalances } = useSolana();
 
   const [showOnboarding, setShowOnboarding] = useState(!connected);
   const [isContractReady, setIsContractReady] = useState(false);
@@ -40,7 +29,6 @@ export function DashboardScreen() {
   const [protocolStats, setProtocolStats] = useState<any>(null);
   const [walletBalance, setWalletBalance] = useState<number>(0);
 
-  // Update onboarding visibility when connection status changes
   useEffect(() => {
     setShowOnboarding(!connected);
     if (connected) {
@@ -50,6 +38,7 @@ export function DashboardScreen() {
 
   const initializeContracts = async () => {
     try {
+      refreshBalances(); // Ensure balances are up-to-date
       // Initialize IntentFI SDK
       await intentFiMobile.initialize('devnet');
       console.log('🚀 IntentFI SDK initialized');

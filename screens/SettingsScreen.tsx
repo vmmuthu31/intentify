@@ -228,10 +228,10 @@ export function SettingsScreen() {
         {/* Profile Section */}
         <Animated.View entering={FadeInUp.duration(600).delay(100)} className="mb-8">
           <View className="rounded-2xl border border-dark-border bg-dark-card p-5">
-            <View className="mb-4 flex-row items-center">
+            <View className="mb-4 flex-row items-start gap-4">
               <Image
                 source={require('../assets/logo.png')}
-                className="h-12 w-12"
+                className="h-10 w-10"
                 resizeMode="contain"
               />
               <View className="flex-1">

@@ -28,7 +28,7 @@ import type { UserProfile, IntentBuilderData } from '../types';
 const { width } = Dimensions.get('window');
 
 export function IntentScreen() {
-  const { publicKey, connected, balance, refreshBalances } = useSolana();
+  const { publicKey, connected } = useSolana();
   const [selectedTab, setSelectedTab] = useState(0);
   const [showIntentBuilder, setShowIntentBuilder] = useState(false);
   const [builderIntentType, setBuilderIntentType] = useState<'swap' | 'buy' | 'lend' | 'launch'>(
@@ -41,6 +41,7 @@ export function IntentScreen() {
   const [loading, setLoading] = useState(false);
   const [recentIntents, setRecentIntents] = useState<any[]>([]);
   const [walletBalance, setWalletBalance] = useState<number>(0);
+  const [isMounted, setIsMounted] = useState(true);
 
   const translateX = useSharedValue(0);
 
@@ -63,45 +64,61 @@ export function IntentScreen() {
   ];
 
   const fetchWalletBalance = async () => {
-    if (!publicKey) return;
+    if (!publicKey || !isMounted) return;
     try {
       const connection = networkService.getConnection();
       const bal = await connection.getBalance(publicKey);
-      setWalletBalance(bal / LAMPORTS_PER_SOL);
-    } catch (error) {
-      setWalletBalance(0);
+      if (isMounted) {
+        setWalletBalance(bal / LAMPORTS_PER_SOL);
+      }
+    } catch {
+      if (isMounted) {
+        setWalletBalance(0);
+      }
     }
   };
 
   const initializeIntentFI = async () => {
-    if (!publicKey) return;
+    if (!publicKey || loading || isInitialized || !isMounted) return;
 
     try {
+      if (!isMounted) return;
       setLoading(true);
 
       // Initialize SDK for devnet
       await intentFiMobile.initialize('devnet');
       console.log('✅ IntentFI SDK initialized on devnet');
 
-      // Create test user (in production, use wallet integration)
-      // const testKeypair = Keypair.generate();
-      // setUserKeypair(testKeypair);
+      console.log('👤 Using wallet:', publicKey.toString());
 
-      console.log('👤 Test user created:', publicKey.toString());
+      // Fetch user profile first to check if already initialized
+      const existingProfile = await intentFiMobile.getUserProfile(publicKey);
+      if (!isMounted) return;
+
+      if (existingProfile?.account) {
+        setUserProfile(existingProfile);
+        setIsInitialized(true);
+        return;
+      }
+
+      // If no profile exists, continue with initialization
       setIsInitialized(true);
-
-      // Try to fetch user profile (will be null until user is initialized)
       await fetchUserProfile();
     } catch (error) {
       console.error('❌ Failed to initialize IntentFI:', error);
-      Alert.alert('Error', 'Failed to initialize IntentFI SDK');
+      // Don't show error alert - allow retry
+      if (isMounted) {
+        setIsInitialized(false);
+      }
     } finally {
-      setLoading(false);
+      if (isMounted) {
+        setLoading(false);
+      }
     }
   };
 
   const fetchUserProfile = async () => {
-    if (!publicKey) return;
+    if (!publicKey || !isInitialized) return;
     try {
       const profile = await intentFiMobile.getUserProfile(publicKey);
       setUserProfile(profile);
@@ -117,6 +134,8 @@ export function IntentScreen() {
           value: `${intent.amount / LAMPORTS_PER_SOL} SOL`,
         }));
         setRecentIntents(formattedIntents);
+      } else {
+        setRecentIntents([]);
       }
 
       console.log('📊 User profile loaded:', profile);
@@ -134,15 +153,12 @@ export function IntentScreen() {
     try {
       setLoading(true);
 
-      // Check wallet status
+      // Check wallet status first
       const walletStatus = await transactionService.getWalletStatusMessage(publicKey);
       console.log('💳 Wallet status:', walletStatus);
 
-      // Prepare wallet for transaction
-      const isReady = await transactionService.prepareWalletForTransaction(
-        publicKey,
-        0.01 // Need at least 0.01 SOL for initialization
-      );
+      // Prepare wallet for transaction with minimum balance check
+      const isReady = await transactionService.prepareWalletForTransaction(publicKey, 0.01);
 
       if (!isReady) {
         Alert.alert(
@@ -158,11 +174,6 @@ export function IntentScreen() {
       }
 
       console.log('🚀 Wallet ready, initializing user account...');
-
-      // Create a keypair from the publicKey for signing
-      // Note: In a real app, you'd need the actual private key for signing
-      // For demo purposes, we'll use the demo wallet functionality
-      const { publicKey: demoPublicKey } = await intentFiMobile.getOrCreateFundedWallet();
 
       // Get the stored wallet data to create a proper keypair
       const storedWallet = await AsyncStorage.getItem('secure_wallet_data');
@@ -253,19 +264,6 @@ export function IntentScreen() {
       // Get or create a pre-funded demo wallet
       const { publicKey: demoPublicKey, hasFunds } = await intentFiMobile.getOrCreateFundedWallet();
 
-      // Update the current user keypair to use the demo wallet
-      const storedWallet = await AsyncStorage.getItem('secure_wallet_data');
-      if (storedWallet) {
-        const parsed = JSON.parse(storedWallet);
-        if (parsed.privateKey && Array.isArray(parsed.privateKey)) {
-          const secretKeyArray = new Uint8Array(parsed.privateKey);
-          if (secretKeyArray.length === 64) {
-            const demoKeypair = Keypair.fromSecretKey(secretKeyArray);
-            // Demo keypair is ready for use
-          }
-        }
-      }
-
       // Try to fund if needed
       if (!hasFunds) {
         await intentFiMobile.ensureWalletFunded(demoPublicKey, 0.05);
@@ -300,7 +298,7 @@ export function IntentScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   };
 
-  const handleTemplatePress = (template: any) => {
+  const handleTemplatePress = () => {
     if (!publicKey || !connected) {
       Alert.alert('Setup Required', 'Please connect your wallet first');
       return;
@@ -428,11 +426,22 @@ export function IntentScreen() {
   };
 
   useEffect(() => {
-    if (publicKey && connected) {
+    if (publicKey && connected && !isInitialized && !loading) {
       initializeIntentFI();
+    }
+  }, [publicKey, connected, isInitialized, loading]);
+
+  useEffect(() => {
+    if (publicKey && connected) {
       fetchWalletBalance();
     }
-  }, [publicKey, connected, initializeIntentFI, fetchWalletBalance]);
+  }, [publicKey, connected]);
+
+  useEffect(() => {
+    return () => {
+      setIsMounted(false);
+    };
+  }, []);
   return (
     <SafeAreaView className="flex-1 bg-dark-bg">
       {/* Header */}
@@ -564,7 +573,7 @@ export function IntentScreen() {
               {swapExamples.map((template, index) => (
                 <TouchableOpacity
                   key={index}
-                  onPress={() => handleTemplatePress(template)}
+                  onPress={handleTemplatePress}
                   className="mr-4 w-64 rounded-xl border border-dark-border bg-dark-card p-4">
                   <View className="mb-2 flex-row items-center">
                     <Text className="mr-2 font-semibold text-primary">{template.from}</Text>
