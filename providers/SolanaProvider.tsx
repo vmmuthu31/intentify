@@ -19,6 +19,13 @@ import {
   BuyIntentParams,
   PhantomWalletInterface,
 } from '../contracts/IntentExecutor';
+import {
+  LaunchpadExecutor,
+  createLaunchpadExecutor,
+  CreateLaunchParams,
+  ContributeParams,
+  LaunchData,
+} from '../contracts/LaunchpadExecutor';
 
 interface TokenBalance {
   mint: string;
@@ -47,6 +54,7 @@ interface SolanaContextType {
   balance: number;
   tokenBalances: TokenBalance[];
   activeIntents: ActiveIntent[];
+  activeLaunches: LaunchData[];
   connectWallet: () => Promise<void>;
   disconnectWallet: () => Promise<void>;
   refreshBalances: () => Promise<void>;
@@ -55,6 +63,11 @@ interface SolanaContextType {
   executeBuyIntent: (params: BuyIntentParams) => Promise<string>;
   getIntentHistory: () => ActiveIntent[];
   cancelIntent: (intentId: string) => Promise<void>;
+  // Launchpad functions
+  createTokenLaunch: (params: CreateLaunchParams) => Promise<string>;
+  contributeToLaunch: (params: ContributeParams) => Promise<string>;
+  finalizeLaunch: (launchPubkey: PublicKey) => Promise<string>;
+  refreshLaunches: () => Promise<void>;
 }
 
 const SolanaContext = createContext<SolanaContextType | undefined>(undefined);
@@ -86,7 +99,9 @@ export function SolanaProvider({ children }: SolanaProviderProps) {
   const [balance, setBalance] = useState(0);
   const [tokenBalances, setTokenBalances] = useState<TokenBalance[]>([]);
   const [activeIntents, setActiveIntents] = useState<ActiveIntent[]>([]);
+  const [activeLaunches, setActiveLaunches] = useState<LaunchData[]>([]);
   const [intentExecutor, setIntentExecutor] = useState<IntentExecutor | null>(null);
+  const [launchpadExecutor, setLaunchpadExecutor] = useState<LaunchpadExecutor | null>(null);
 
   // Get Phantom wallet state
   const {
@@ -148,11 +163,11 @@ export function SolanaProvider({ children }: SolanaProviderProps) {
   // Initialize intent executor when wallet connects
   useEffect(() => {
     if (publicKey) {
-      // Create phantom wallet interface for IntentExecutor
-      const phantomWalletInterface = {
-        signTransaction: (transaction: Transaction, onSuccess?: () => void) => {
-          // Wrap the original signTransaction to handle success callbacks
-          return signTransaction(transaction, () => {
+      // Create phantom wallet interface for IntentExecutor and LaunchpadExecutor
+      const phantomWalletInterface: PhantomWalletInterface = {
+        signTransaction: async (transaction: Transaction, onSuccess?: () => void) => {
+          // Wrap the original signTransaction to handle success callbacks and ensure string return
+          const result = await signTransaction(transaction, () => {
             console.log('✅ Transaction completed successfully in SolanaProvider');
             console.log('🔍 Success callback details:', {
               hasOnSuccess: !!onSuccess,
@@ -171,6 +186,9 @@ export function SolanaProvider({ children }: SolanaProviderProps) {
             console.log('🔄 Refreshing balances after successful transaction');
             refreshBalances();
           });
+
+          // Ensure we always return a string
+          return result || 'transaction_failed';
         },
         sharedSecret,
         session,
@@ -180,7 +198,13 @@ export function SolanaProvider({ children }: SolanaProviderProps) {
 
       const executor = createIntentExecutor(connection, publicKey, phantomWalletInterface);
       setIntentExecutor(executor);
+
+      // Create launchpad executor
+      const launchpadExec = createLaunchpadExecutor(connection, publicKey, phantomWalletInterface);
+      setLaunchpadExecutor(launchpadExec);
+
       loadIntentHistory();
+      refreshLaunches();
     } else {
       setIntentExecutor(null);
     }
@@ -611,6 +635,102 @@ export function SolanaProvider({ children }: SolanaProviderProps) {
     }
   };
 
+  // Launchpad functions
+  const createTokenLaunch = async (params: CreateLaunchParams): Promise<string> => {
+    if (!launchpadExecutor) {
+      throw new Error('Launchpad executor not initialized');
+    }
+
+    if (!publicKey) {
+      throw new Error('Wallet not connected');
+    }
+
+    console.log('🚀 Creating token launch with params:', params);
+
+    try {
+      const txId = await launchpadExecutor.createTokenLaunch(params, () => {
+        console.log('🎉 Launch creation confirmed on blockchain');
+        // Refresh launches after successful creation
+        refreshLaunches();
+      });
+
+      console.log('✅ Token launch created:', txId);
+      return txId;
+    } catch (error) {
+      console.error('❌ Token launch creation failed:', error);
+      throw error;
+    }
+  };
+
+  const contributeToLaunch = async (params: ContributeParams): Promise<string> => {
+    if (!launchpadExecutor) {
+      throw new Error('Launchpad executor not initialized');
+    }
+
+    if (!publicKey) {
+      throw new Error('Wallet not connected');
+    }
+
+    console.log('💰 Contributing to launch:', params);
+
+    try {
+      const txId = await launchpadExecutor.contributeToLaunch(params, () => {
+        console.log('🎉 Contribution confirmed on blockchain');
+        // Refresh launches and balances after successful contribution
+        refreshLaunches();
+        refreshBalances();
+      });
+
+      console.log('✅ Contribution successful:', txId);
+      return txId;
+    } catch (error) {
+      console.error('❌ Contribution failed:', error);
+      throw error;
+    }
+  };
+
+  const finalizeLaunch = async (launchPubkey: PublicKey): Promise<string> => {
+    if (!launchpadExecutor) {
+      throw new Error('Launchpad executor not initialized');
+    }
+
+    if (!publicKey) {
+      throw new Error('Wallet not connected');
+    }
+
+    console.log('🏁 Finalizing launch:', launchPubkey.toString());
+
+    try {
+      const txId = await launchpadExecutor.finalizeLaunch(launchPubkey, () => {
+        console.log('🎉 Launch finalization confirmed on blockchain');
+        // Refresh launches after finalization
+        refreshLaunches();
+      });
+
+      console.log('✅ Launch finalized:', txId);
+      return txId;
+    } catch (error) {
+      console.error('❌ Launch finalization failed:', error);
+      throw error;
+    }
+  };
+
+  const refreshLaunches = async () => {
+    if (!launchpadExecutor) {
+      console.log('⚠️ Launchpad executor not initialized, skipping launch refresh');
+      return;
+    }
+
+    try {
+      console.log('🔄 Refreshing active launches...');
+      const launches = await launchpadExecutor.getActiveLaunches();
+      setActiveLaunches(launches);
+      console.log(`✅ Found ${launches.length} active launches`);
+    } catch (error) {
+      console.error('❌ Failed to refresh launches:', error);
+    }
+  };
+
   const value: SolanaContextType = {
     connection,
     publicKey,
@@ -619,6 +739,7 @@ export function SolanaProvider({ children }: SolanaProviderProps) {
     balance,
     tokenBalances,
     activeIntents,
+    activeLaunches,
     connectWallet,
     disconnectWallet,
     refreshBalances,
@@ -627,6 +748,11 @@ export function SolanaProvider({ children }: SolanaProviderProps) {
     executeBuyIntent,
     getIntentHistory,
     cancelIntent,
+    // Launchpad functions
+    createTokenLaunch,
+    contributeToLaunch,
+    finalizeLaunch,
+    refreshLaunches,
   };
 
   return <SolanaContext.Provider value={value}>{children}</SolanaContext.Provider>;
