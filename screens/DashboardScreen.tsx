@@ -1,15 +1,15 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, TouchableOpacity, Dimensions, Alert, Modal } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, Dimensions, Alert, Modal } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { FadeInUp, FadeInDown, BounceIn } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
-import { Keypair, LAMPORTS_PER_SOL } from '@solana/web3.js';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { LAMPORTS_PER_SOL } from '@solana/web3.js';
 
 // Import our custom components
 import { SwipeableCard } from '../components/SwipeableCard';
+import { AnimatedButton } from '../components/AnimatedButton';
 import { PullToRefresh } from '../components/PullToRefresh';
 import { WalletOnboardingScreen } from './WalletOnboardingScreen';
 import { useSolana } from '../providers/SolanaProvider';
@@ -17,115 +17,59 @@ import { useSolana } from '../providers/SolanaProvider';
 // Import IntentFI services
 import { intentFiMobile, networkService } from '../services';
 
+const { width } = Dimensions.get('window');
+
 export function DashboardScreen() {
-  const { connected, balance, tokenBalances, publicKey, refreshBalances } = useSolana();
+  const {
+    connected,
+    connecting,
+    balance,
+    tokenBalances,
+    publicKey,
+    refreshBalances,
+    connectWallet,
+  } = useSolana();
 
   const [showOnboarding, setShowOnboarding] = useState(!connected);
   const [isContractReady, setIsContractReady] = useState(false);
-  const [userKeypair, setUserKeypair] = useState<Keypair | null>(null);
   const [userProfile, setUserProfile] = useState<any>(null);
   const [activeIntents, setActiveIntents] = useState<any[]>([]);
   const [launchpadState, setLaunchpadState] = useState<any>(null);
   const [protocolStats, setProtocolStats] = useState<any>(null);
-  const [walletBalance, setWalletBalance] = useState<number>(0);
 
+  // Update onboarding visibility when connection status changes
   useEffect(() => {
     setShowOnboarding(!connected);
-    if (connected) {
+    if (connected && publicKey) {
       initializeContracts();
     }
-  }, [connected]);
+  }, [connected, publicKey]);
 
   const initializeContracts = async () => {
+    if (!publicKey) return;
+
     try {
-      refreshBalances(); // Ensure balances are up-to-date
+      await refreshBalances();
       // Initialize IntentFI SDK
       await intentFiMobile.initialize('devnet');
       console.log('🚀 IntentFI SDK initialized');
-
-      // Use the connected Phantom wallet if available
-      if (connected && publicKey) {
-        console.log('✅ Using connected Phantom wallet:', publicKey.toString().slice(0, 8) + '...');
-        // No need to create or fund wallet - user has their own Phantom wallet with funds
-      } else {
-        // Fallback: Get or create a funded wallet seamlessly
-        const { publicKey: walletPublicKey, hasFunds } =
-          await intentFiMobile.getOrCreateFundedWallet();
-        console.log('👤 Fallback wallet ready:', walletPublicKey.toString().slice(0, 8) + '...');
-
-        // Ensure wallet has minimum funds for operations
-        if (!hasFunds) {
-          console.log('💧 Ensuring wallet is funded...');
-          const fundingResult = await intentFiMobile.ensureWalletFunded(walletPublicKey, 0.05);
-          if (!fundingResult) {
-            console.warn('⚠️ Wallet funding failed - some features may be limited');
-          }
-        }
-      }
-
-      // Create Keypair object for backward compatibility
-      const storedWallet = await AsyncStorage.getItem('secure_wallet_data');
-      if (storedWallet) {
-        const parsed = JSON.parse(storedWallet);
-        if (parsed.privateKey && Array.isArray(parsed.privateKey)) {
-          try {
-            // Convert array back to Uint8Array and ensure it's exactly 64 bytes
-            const secretKeyArray = new Uint8Array(parsed.privateKey);
-            if (secretKeyArray.length === 64) {
-              const testKeypair = Keypair.fromSecretKey(secretKeyArray);
-              setUserKeypair(testKeypair);
-            } else {
-              console.error('Invalid secret key size:', secretKeyArray.length);
-            }
-          } catch (error) {
-            console.error('Failed to reconstruct keypair:', error);
-          }
-        }
-      }
+      console.log('✅ Using connected wallet:', publicKey.toString().slice(0, 8) + '...');
 
       setIsContractReady(true);
       await fetchContractData();
-      await fetchWalletBalance();
-
       console.log('✅ Dashboard contracts initialized');
     } catch (error) {
       console.error('❌ Failed to initialize contracts:', error);
-      // Don't completely fail - allow users to still see the UI
       setIsContractReady(true);
     }
   };
 
   const fetchContractData = async () => {
-    if (!userKeypair) {
-      // Try to get wallet from storage if userKeypair is not set
-      try {
-        const storedWallet = await AsyncStorage.getItem('secure_wallet_data');
-        if (storedWallet) {
-          const parsed = JSON.parse(storedWallet);
-          if (parsed.privateKey && Array.isArray(parsed.privateKey)) {
-            try {
-              const secretKeyArray = new Uint8Array(parsed.privateKey);
-              if (secretKeyArray.length === 64) {
-                const testKeypair = Keypair.fromSecretKey(secretKeyArray);
-                setUserKeypair(testKeypair);
-                return;
-              }
-            } catch (error) {
-              console.error('Failed to reconstruct keypair in fetchContractData:', error);
-            }
-          }
-        }
-      } catch (error) {
-        console.error('Failed to get stored wallet:', error);
-      }
-      return;
-    }
-
-    const targetKeypair = userKeypair;
+    if (!publicKey) return;
 
     try {
       // Fetch user profile and intents
-      const profile = await intentFiMobile.getUserProfile(targetKeypair.publicKey);
+      const profile = await intentFiMobile.getUserProfile(publicKey);
       setUserProfile(profile);
 
       // Format intents for display
@@ -155,36 +99,6 @@ export function DashboardScreen() {
       });
     } catch (error) {
       console.error('❌ Failed to fetch contract data:', error);
-    }
-  };
-
-  const fetchWalletBalance = async () => {
-    try {
-      // Try to get wallet from userKeypair or storage
-      let targetKeypair = userKeypair;
-
-      if (!targetKeypair) {
-        const storedWallet = await AsyncStorage.getItem('secure_wallet_data');
-        if (storedWallet) {
-          const parsed = JSON.parse(storedWallet);
-          if (parsed.privateKey && Array.isArray(parsed.privateKey)) {
-            const secretKeyArray = new Uint8Array(parsed.privateKey);
-            if (secretKeyArray.length === 64) {
-              targetKeypair = Keypair.fromSecretKey(secretKeyArray);
-            }
-          }
-        }
-      }
-
-      if (!targetKeypair) return;
-
-      const connection = networkService.getConnection();
-      const balance = await connection.getBalance(targetKeypair.publicKey);
-      const balanceInSOL = balance / LAMPORTS_PER_SOL;
-      setWalletBalance(balanceInSOL);
-      console.log(`💰 Wallet balance: ${balanceInSOL.toFixed(4)} SOL`);
-    } catch (error) {
-      console.error('Failed to fetch wallet balance:', error);
     }
   };
 
@@ -311,10 +225,10 @@ export function DashboardScreen() {
             )}
           </View>
           <View className="flex-row items-center">
-            {connected && (
+            {connected && publicKey && (
               <View className="mr-3 rounded-full bg-success/20 px-3 py-1">
                 <Text className="text-xs font-medium text-success">
-                  {publicKey?.toString().slice(0, 4)}...{publicKey?.toString().slice(-4)}
+                  {publicKey.toString().slice(0, 4)}...{publicKey.toString().slice(-4)}
                 </Text>
               </View>
             )}
@@ -491,7 +405,7 @@ export function DashboardScreen() {
         <Animated.View entering={FadeInDown.duration(600).delay(400)} className="mb-8 px-4">
           <Text className="mb-4 text-lg font-semibold text-white">Recent Activity</Text>
 
-          {isContractReady && userKeypair ? (
+          {isContractReady && publicKey ? (
             <View className="rounded-xl border border-dark-border bg-dark-card p-4">
               <View className="mb-3 flex-row items-center justify-between">
                 <View className="flex-row items-center">
@@ -499,7 +413,7 @@ export function DashboardScreen() {
                     <Ionicons name="person-add" size={16} color="#FF4500" />
                   </View>
                   <View>
-                    <Text className="font-medium text-white">Account Created</Text>
+                    <Text className="font-medium text-white">Account Connected</Text>
                     <Text className="text-xs text-gray-400">Ready for IntentFI on devnet</Text>
                   </View>
                 </View>
@@ -508,7 +422,7 @@ export function DashboardScreen() {
 
               <View className="border-t border-dark-border pt-3">
                 <Text className="text-xs text-gray-400">
-                  Wallet: {userKeypair.publicKey.toString().slice(0, 20)}...
+                  Wallet: {publicKey.toString().slice(0, 20)}...
                 </Text>
                 <Text className="text-xs text-gray-400">
                   Network: {networkService.getCurrentNetwork().toUpperCase()}

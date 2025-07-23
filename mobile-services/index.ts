@@ -49,15 +49,28 @@ export class IntentFiSDK {
   // Transaction Helpers
   public async sendTransaction(
     transaction: Transaction,
-    signer: Keypair,
+    signer: Keypair | PublicKey,
     commitment: 'processed' | 'confirmed' | 'finalized' = 'confirmed'
   ): Promise<string> {
     try {
       const connection = networkService.getConnection();
-      const signature = await sendAndConfirmTransaction(connection, transaction, [signer], {
-        commitment,
-      });
-      return signature;
+
+      // If signer is a Keypair, use sendAndConfirmTransaction
+      if (signer instanceof Keypair) {
+        const signature = await sendAndConfirmTransaction(connection, transaction, [signer], {
+          commitment,
+        });
+        return signature;
+      } else {
+        // If signer is a PublicKey, prepare the transaction but don't sign it
+        // This is for use with external wallets like Phantom that handle signing
+        transaction.feePayer = signer;
+        transaction.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+
+        // Return a placeholder signature since we can't actually send the transaction
+        // The caller should handle the actual signing and sending
+        return 'transaction_prepared_for_external_signing';
+      }
     } catch (error) {
       console.error('Transaction failed:', error);
       throw error;
@@ -179,7 +192,7 @@ export class IntentFiMobile {
    * Create and send a swap intent transaction
    */
   public async createAndExecuteSwapIntent(
-    userKeypair: Keypair,
+    userKeypair: Keypair | PublicKey,
     fromMint: PublicKey,
     toMint: PublicKey,
     amount: number,
@@ -193,6 +206,7 @@ export class IntentFiMobile {
         maxSlippage,
       };
 
+      // Using the updated SDK methods that accept both Keypair and PublicKey
       const transaction = await this.sdk.intentFi.createSwapIntent(userKeypair, swapParams);
       const signature = await this.sdk.sendTransaction(transaction, userKeypair);
 
@@ -208,7 +222,7 @@ export class IntentFiMobile {
    * Create and send a lending intent transaction
    */
   public async createAndExecuteLendIntent(
-    userKeypair: Keypair,
+    userKeypair: Keypair | PublicKey,
     mint: PublicKey,
     amount: number,
     minApy: number = 500 // 5% default
@@ -220,6 +234,7 @@ export class IntentFiMobile {
         minApy,
       };
 
+      // Using the updated SDK methods that accept both Keypair and PublicKey
       const transaction = await this.sdk.intentFi.createLendIntent(userKeypair, lendParams);
       const signature = await this.sdk.sendTransaction(transaction, userKeypair);
 

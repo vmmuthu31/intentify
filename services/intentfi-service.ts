@@ -3,13 +3,10 @@ import {
   Transaction,
   SystemProgram,
   Keypair,
-  SYSVAR_CLOCK_PUBKEY,
-  SYSVAR_RENT_PUBKEY,
   TransactionInstruction,
 } from '@solana/web3.js';
 import {
   TOKEN_PROGRAM_ID,
-  ASSOCIATED_TOKEN_PROGRAM_ID,
   getAssociatedTokenAddress,
   createAssociatedTokenAccountInstruction,
 } from '@solana/spl-token';
@@ -126,13 +123,15 @@ export class IntentFiService {
   /**
    * Initialize a user account
    */
-  public async initializeUser(authority: Keypair): Promise<Transaction> {
-    const [userAccount] = await this.getUserAccountPDA(authority.publicKey);
+  public async initializeUser(authority: Keypair | PublicKey): Promise<Transaction> {
+    // Get the public key from either the Keypair or the PublicKey directly
+    const publicKey = authority instanceof Keypair ? authority.publicKey : authority;
+    const [userAccount] = await this.getUserAccountPDA(publicKey);
 
     const instruction = new TransactionInstruction({
       programId: networkService.getIntentFiProgramId(),
       keys: [
-        { pubkey: authority.publicKey, isSigner: true, isWritable: true },
+        { pubkey: publicKey, isSigner: true, isWritable: true },
         { pubkey: userAccount, isSigner: false, isWritable: true },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       ],
@@ -147,22 +146,25 @@ export class IntentFiService {
    * Create a swap intent
    */
   public async createSwapIntent(
-    authority: Keypair,
+    authority: Keypair | PublicKey,
     params: SwapIntentParams
   ): Promise<Transaction> {
+    // Get the public key from either the Keypair or the PublicKey directly
+    const publicKey = authority instanceof Keypair ? authority.publicKey : authority;
+
     const [protocolState] = await this.getProtocolStatePDA();
-    const [userAccount] = await this.getUserAccountPDA(authority.publicKey);
+    const [userAccount] = await this.getUserAccountPDA(publicKey);
 
     // Get user's current intent count to determine intent number
-    const userAccountInfo = await this.getUserAccount(authority.publicKey);
+    const userAccountInfo = await this.getUserAccount(publicKey);
     const intentNumber = userAccountInfo ? userAccountInfo.totalIntentsCreated + 1 : 1;
 
-    const [intentAccount] = await this.getIntentAccountPDA(authority.publicKey, intentNumber);
+    const [intentAccount] = await this.getIntentAccountPDA(publicKey, intentNumber);
 
     const instruction = new TransactionInstruction({
       programId: networkService.getIntentFiProgramId(),
       keys: [
-        { pubkey: authority.publicKey, isSigner: true, isWritable: true },
+        { pubkey: publicKey, isSigner: true, isWritable: true },
         { pubkey: protocolState, isSigner: false, isWritable: true },
         { pubkey: userAccount, isSigner: false, isWritable: true },
         { pubkey: intentAccount, isSigner: false, isWritable: true },
@@ -185,22 +187,25 @@ export class IntentFiService {
    * Create a lending intent
    */
   public async createLendIntent(
-    authority: Keypair,
+    authority: Keypair | PublicKey,
     params: LendIntentParams
   ): Promise<Transaction> {
+    // Get the public key from either the Keypair or the PublicKey directly
+    const publicKey = authority instanceof Keypair ? authority.publicKey : authority;
+
     const [protocolState] = await this.getProtocolStatePDA();
-    const [userAccount] = await this.getUserAccountPDA(authority.publicKey);
+    const [userAccount] = await this.getUserAccountPDA(publicKey);
 
     // Get user's current intent count to determine intent number
-    const userAccountInfo = await this.getUserAccount(authority.publicKey);
+    const userAccountInfo = await this.getUserAccount(publicKey);
     const intentNumber = userAccountInfo ? userAccountInfo.totalIntentsCreated + 1 : 1;
 
-    const [intentAccount] = await this.getIntentAccountPDA(authority.publicKey, intentNumber);
+    const [intentAccount] = await this.getIntentAccountPDA(publicKey, intentNumber);
 
     const instruction = new TransactionInstruction({
       programId: networkService.getIntentFiProgramId(),
       keys: [
-        { pubkey: authority.publicKey, isSigner: true, isWritable: true },
+        { pubkey: publicKey, isSigner: true, isWritable: true },
         { pubkey: protocolState, isSigner: false, isWritable: true },
         { pubkey: userAccount, isSigner: false, isWritable: true },
         { pubkey: intentAccount, isSigner: false, isWritable: true },
@@ -286,13 +291,15 @@ export class IntentFiService {
         return null;
       }
 
-      // Parse account data (simplified - you'd use proper deserialization)
+      // Parse account data (simplified - using DataView instead of Buffer methods)
       const data = accountInfo.data;
+      const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+
       return {
         authority,
-        activeIntents: data.readUInt8(32),
-        totalIntentsCreated: Number(data.readBigUInt64LE(33)),
-        totalVolume: Number(data.readBigUInt64LE(41)),
+        activeIntents: view.getUint8(32),
+        totalIntentsCreated: Number(view.getBigUint64(33, true)), // true for little-endian
+        totalVolume: Number(view.getBigUint64(41, true)), // true for little-endian
       };
     } catch (error) {
       console.error('Error fetching user account:', error);
@@ -311,7 +318,7 @@ export class IntentFiService {
         return null;
       }
 
-      // Parse account data (simplified - you'd use proper deserialization)
+      // Parse account data (simplified - using DataView instead of Buffer methods)
       const data = accountInfo.data;
 
       // Validate data length
@@ -331,7 +338,7 @@ export class IntentFiService {
       }
 
       // Helper function to safely create PublicKey from buffer slice
-      const safePublicKey = (buffer: Buffer, start: number, end: number): PublicKey => {
+      const safePublicKey = (buffer: Uint8Array, start: number, end: number): PublicKey => {
         try {
           const keyBytes = buffer.slice(start, end);
           return new PublicKey(keyBytes);
@@ -341,16 +348,21 @@ export class IntentFiService {
         }
       };
 
+      const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+      const intentType = view.getUint8(40) === 0 ? 'Swap' : 'Lend';
+      const statusIndex = view.getUint8(41);
+      const status = ['Pending', 'Executed', 'Cancelled', 'Expired'][statusIndex] as any;
+
       return {
         authority: safePublicKey(data, 8, 40),
-        intentType: data.readUInt8(40) === 0 ? 'Swap' : 'Lend',
-        status: ['Pending', 'Executed', 'Cancelled', 'Expired'][data.readUInt8(41)] as any,
+        intentType,
+        status,
         fromMint: safePublicKey(data, 42, 74),
         toMint: safePublicKey(data, 74, 106),
-        amount: Number(data.readBigUInt64LE(106)),
-        protocolFee: Number(data.readBigUInt64LE(114)),
-        createdAt: Number(data.readBigInt64LE(122)),
-        expiresAt: Number(data.readBigInt64LE(130)),
+        amount: Number(view.getBigUint64(106, true)),
+        protocolFee: Number(view.getBigUint64(114, true)),
+        createdAt: Number(view.getBigInt64(122, true)),
+        expiresAt: Number(view.getBigInt64(130, true)),
       };
     } catch (error) {
       console.error('Error fetching intent account:', error);
@@ -410,6 +422,47 @@ export class IntentFiService {
     );
 
     return { address: associatedToken, instruction };
+  }
+
+  /**
+   * Update the sendTransaction method to accept either a Keypair or a PublicKey
+   */
+  public async sendTransaction(
+    transaction: Transaction,
+    signer: Keypair | PublicKey,
+    commitment: 'processed' | 'confirmed' | 'finalized' = 'confirmed'
+  ): Promise<string> {
+    try {
+      // If signer is a Keypair, sign the transaction
+      if (signer instanceof Keypair) {
+        transaction.feePayer = signer.publicKey;
+        transaction.recentBlockhash = (
+          await networkService.getConnection().getLatestBlockhash()
+        ).blockhash;
+        transaction.sign(signer);
+
+        // Send the signed transaction
+        const signature = await networkService
+          .getConnection()
+          .sendRawTransaction(transaction.serialize(), { preflightCommitment: commitment });
+
+        return signature;
+      } else {
+        // If signer is a PublicKey, prepare the transaction but don't sign it
+        // This is for use with external wallets like Phantom that handle signing
+        transaction.feePayer = signer;
+        transaction.recentBlockhash = (
+          await networkService.getConnection().getLatestBlockhash()
+        ).blockhash;
+
+        // Return a placeholder signature since we can't actually send the transaction
+        // The caller should handle the actual signing and sending
+        return 'transaction_prepared_for_external_signing';
+      }
+    } catch (error) {
+      console.error('Error sending transaction:', error);
+      throw error;
+    }
   }
 }
 

@@ -30,6 +30,7 @@ export function PortfolioScreen() {
 
   const initializePortfolioData = async () => {
     try {
+      await refreshBalances();
       // Initialize IntentFI SDK
       await intentFiMobile.initialize('devnet');
 
@@ -164,7 +165,7 @@ export function PortfolioScreen() {
   const portfolioChange = getPortfolioChange();
 
   return (
-    <SafeAreaView className="bg-dark-bg flex-1">
+    <SafeAreaView className="flex-1 bg-dark-bg">
       {/* Header */}
       <Animated.View
         entering={FadeInUp.duration(600)}
@@ -186,7 +187,7 @@ export function PortfolioScreen() {
         <Animated.View entering={FadeInUp.duration(600).delay(100)} className="mx-4 mb-6">
           <LinearGradient
             colors={['#1F1F23', '#2A2A2E']}
-            className="border-dark-border rounded-2xl border p-6">
+            className="rounded-2xl border border-dark-border p-6">
             <Text className="text-sm text-gray-400">Total Portfolio Value</Text>
             <Text className="mb-2 text-3xl font-bold text-white">{getTotalPortfolioValue()}</Text>
             <View className="flex-row items-center">
@@ -214,29 +215,29 @@ export function PortfolioScreen() {
         {/* Contract Stats */}
         {isContractReady && portfolioStats && (
           <Animated.View entering={FadeInUp.duration(600).delay(150)} className="mx-4 mb-6">
-            <View className="bg-dark-card border-dark-border rounded-xl border p-4">
+            <View className="rounded-xl border border-dark-border bg-dark-card p-4">
               <Text className="mb-3 font-semibold text-white">IntentFI Activity</Text>
               <View className="flex-row justify-between">
                 <View className="items-center">
-                  <Text className="text-primary text-lg font-bold">
+                  <Text className="text-lg font-bold text-primary">
                     {portfolioStats.totalIntentsCreated}
                   </Text>
                   <Text className="text-xs text-gray-400">Total Intents</Text>
                 </View>
                 <View className="items-center">
-                  <Text className="text-primary text-lg font-bold">
+                  <Text className="text-lg font-bold text-primary">
                     {portfolioStats.activeIntents}
                   </Text>
                   <Text className="text-xs text-gray-400">Active</Text>
                 </View>
                 <View className="items-center">
-                  <Text className="text-primary text-lg font-bold">
+                  <Text className="text-lg font-bold text-primary">
                     {(portfolioStats.intentVolume / LAMPORTS_PER_SOL).toFixed(1)}
                   </Text>
                   <Text className="text-xs text-gray-400">SOL Volume</Text>
                 </View>
                 <View className="items-center">
-                  <Text className="text-primary text-lg font-bold">
+                  <Text className="text-lg font-bold text-primary">
                     {portfolioStats.launchContributions}
                   </Text>
                   <Text className="text-xs text-gray-400">Launches</Text>
@@ -257,7 +258,7 @@ export function PortfolioScreen() {
                   className={`rounded-full px-4 py-2 ${
                     selectedTimeframe === timeframe
                       ? 'bg-primary'
-                      : 'bg-dark-card border-dark-border border'
+                      : 'border border-dark-border bg-dark-card'
                   }`}>
                   <Text
                     className={`font-medium ${
@@ -276,14 +277,14 @@ export function PortfolioScreen() {
           <Text className="mb-4 text-lg font-semibold text-white">Holdings ({assets.length})</Text>
 
           {!connected ? (
-            <View className="bg-dark-card border-dark-border items-center rounded-xl border p-8">
+            <View className="items-center rounded-xl border border-dark-border bg-dark-card p-8">
               <Ionicons name="wallet-outline" size={48} color="#8E8E93" />
               <Text className="mt-4 text-center text-gray-400">
                 Connect your wallet to view holdings
               </Text>
             </View>
           ) : assets.length === 0 ? (
-            <View className="bg-dark-card border-dark-border items-center rounded-xl border p-8">
+            <View className="items-center rounded-xl border border-dark-border bg-dark-card p-8">
               <Ionicons name="list-outline" size={48} color="#8E8E93" />
               <Text className="mt-4 text-center text-gray-400">No tokens found in your wallet</Text>
               <Text className="mt-2 text-xs text-gray-500">
@@ -297,9 +298,9 @@ export function PortfolioScreen() {
                 entering={BounceIn.duration(600).delay(index * 100)}>
                 <TouchableOpacity
                   onPress={() => handleAssetPress(asset)}
-                  className="bg-dark-card border-dark-border mb-3 flex-row items-center rounded-2xl border p-4">
-                  <View className="bg-primary/20 mr-4 h-12 w-12 items-center justify-center rounded-full">
-                    <Text className="text-primary text-sm font-bold">
+                  className="mb-3 flex-row items-center rounded-2xl border border-dark-border bg-dark-card p-4">
+                  <View className="mr-4 h-12 w-12 items-center justify-center rounded-full bg-primary/20">
+                    <Text className="text-sm font-bold text-primary">
                       {asset.symbol.slice(0, 3)}
                     </Text>
                   </View>
@@ -337,7 +338,7 @@ export function PortfolioScreen() {
         {isContractReady && userKeypair && (
           <Animated.View entering={FadeInUp.duration(600).delay(400)} className="mb-8 px-4">
             <Text className="mb-4 text-lg font-semibold text-white">Contract Information</Text>
-            <View className="bg-dark-card border-dark-border rounded-xl border p-4">
+            <View className="rounded-xl border border-dark-border bg-dark-card p-4">
               <View className="space-y-3">
                 <View className="flex-row justify-between">
                   <Text className="text-gray-400">Network</Text>
@@ -359,7 +360,7 @@ export function PortfolioScreen() {
                   <Text className="text-gray-400">Launchpad Contract</Text>
                   <Text className="font-mono text-xs text-white">5y2X9WML...</Text>
                 </View>
-                <View className="border-dark-border border-t pt-3">
+                <View className="border-t border-dark-border pt-3">
                   <Text className="text-center text-xs text-gray-500">
                     All contracts deployed on Solana Devnet for testing
                   </Text>

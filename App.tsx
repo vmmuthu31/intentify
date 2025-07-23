@@ -1,109 +1,154 @@
 // Import polyfills first, before any other imports
 import './polyfills';
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
+import { StatusBar } from 'expo-status-bar';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { View, Modal } from 'react-native';
 
+// Import screens
 import { DashboardScreen } from './screens/DashboardScreen';
 import { IntentScreen } from './screens/IntentScreen';
-import { PortfolioScreen } from './screens/PortfolioScreen';
 import { LaunchpadScreen } from './screens/LaunchpadScreen';
+import { PortfolioScreen } from './screens/PortfolioScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
-import { Colors } from './constants/Colors';
-
-import { SolanaProvider, useSolana } from './providers/SolanaProvider';
-import { PhantomProvider } from './providers/PhantomProvider';
 import { WalletOnboardingScreen } from './screens/WalletOnboardingScreen';
+
+// Import providers
+import { SolanaProvider } from './providers/SolanaProvider';
+import { PhantomProvider } from './providers/PhantomProvider';
+
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+
+import { Colors } from './constants/Colors';
 
 import './global.css';
 
 const Tab = createBottomTabNavigator();
 
-function AppNavigator() {
-  return (
-    <NavigationContainer>
-      <StatusBar style="light" />
-      <Tab.Navigator
-        screenOptions={({ route }) => ({
-          tabBarIcon: ({ focused, color, size }) => {
-            let iconName: keyof typeof Ionicons.glyphMap;
+export default function App() {
+  const [isOnboardingComplete, setIsOnboardingComplete] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
-            if (route.name === 'Dashboard') {
-              iconName = focused ? 'home' : 'home-outline';
-            } else if (route.name === 'Intent') {
-              iconName = focused ? 'flash' : 'flash-outline';
-            } else if (route.name === 'Portfolio') {
-              iconName = focused ? 'pie-chart' : 'pie-chart-outline';
-            } else if (route.name === 'Launchpad') {
-              iconName = focused ? 'rocket' : 'rocket-outline';
-            } else if (route.name === 'Settings') {
-              iconName = focused ? 'settings' : 'settings-outline';
-            } else {
-              iconName = 'help-outline';
-            }
+  // Check if user has completed onboarding
+  useEffect(() => {
+    const checkOnboardingStatus = async () => {
+      try {
+        const onboardingComplete = await AsyncStorage.getItem('onboarding_complete');
+        const connectedWallet = await AsyncStorage.getItem('connected_wallet');
 
-            return <Ionicons name={iconName} size={size} color={color} />;
-          },
-          tabBarActiveTintColor: Colors.dark.primary,
-          tabBarInactiveTintColor: Colors.dark.tabIconDefault,
-          tabBarStyle: {
-            backgroundColor: Colors.dark.card,
-            borderTopColor: Colors.dark.border,
-            paddingBottom: 5,
-            paddingTop: 5,
-            height: 60,
-          },
-          headerShown: false,
-          tabBarLabelStyle: {
-            fontSize: 12,
-            fontWeight: '500',
-          },
-        })}>
-        <Tab.Screen name="Dashboard" component={DashboardScreen} />
-        <Tab.Screen name="Intent" component={IntentScreen} />
-        <Tab.Screen name="Portfolio" component={PortfolioScreen} />
-        <Tab.Screen name="Launchpad" component={LaunchpadScreen} />
-        <Tab.Screen name="Settings" component={SettingsScreen} />
-      </Tab.Navigator>
-    </NavigationContainer>
-  );
-}
+        // Only consider onboarding complete if there's a connected wallet
+        setIsOnboardingComplete(onboardingComplete === 'true' && !!connectedWallet);
+      } catch (error) {
+        console.error('Error checking onboarding status:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
 
-function MainApp() {
-  const { connected } = useSolana();
+    checkOnboardingStatus();
+  }, []);
 
-  // Show onboarding screen if wallet is not connected
-  if (!connected) {
+  const handleOnboardingComplete = async () => {
+    try {
+      await AsyncStorage.setItem('onboarding_complete', 'true');
+      setIsOnboardingComplete(true);
+    } catch (error) {
+      console.error('Error saving onboarding status:', error);
+    }
+  };
+
+  // Show loading screen while checking onboarding status
+  if (isLoading) {
     return (
-      <NavigationContainer>
-        <StatusBar style="light" />
-        <WalletOnboardingScreen
-          onComplete={() => {
-            // The onComplete callback isn't needed since wallet connection
-            // will automatically trigger a re-render showing the main app
-            console.log('✅ Wallet onboarding completed');
-          }}
-        />
-      </NavigationContainer>
+      <SafeAreaProvider>
+        <View style={{ flex: 1, backgroundColor: '#121212' }} />
+      </SafeAreaProvider>
     );
   }
 
-  // Show main app if wallet is connected
-  return <AppNavigator />;
-}
-
-export default function App() {
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
+    <SafeAreaProvider>
       <PhantomProvider>
         <SolanaProvider>
-          <MainApp />
+          <StatusBar style="light" />
+
+          {!isOnboardingComplete ? (
+            <Modal visible={true} animationType="slide" presentationStyle="fullScreen">
+              <WalletOnboardingScreen onComplete={handleOnboardingComplete} />
+            </Modal>
+          ) : (
+            <NavigationContainer>
+              <Tab.Navigator
+                screenOptions={{
+                  tabBarActiveTintColor: '#FF4500',
+                  tabBarInactiveTintColor: '#8E8E93',
+                  tabBarStyle: {
+                    backgroundColor: '#1C1C1E',
+                    borderTopColor: '#2C2C2E',
+                    height: 60,
+                    paddingBottom: 10,
+                  },
+                  tabBarShowLabel: true,
+                  tabBarLabelStyle: {
+                    fontSize: 12,
+                  },
+                  headerShown: false,
+                }}>
+                <Tab.Screen
+                  name="Dashboard"
+                  component={DashboardScreen}
+                  options={{
+                    tabBarIcon: ({ color, size }) => (
+                      <Ionicons name="home" color={color} size={size} />
+                    ),
+                  }}
+                />
+                <Tab.Screen
+                  name="Intent"
+                  component={IntentScreen}
+                  options={{
+                    tabBarIcon: ({ color, size }) => (
+                      <Ionicons name="flash" color={color} size={size} />
+                    ),
+                  }}
+                />
+                <Tab.Screen
+                  name="Launchpad"
+                  component={LaunchpadScreen}
+                  options={{
+                    tabBarIcon: ({ color, size }) => (
+                      <Ionicons name="rocket" color={color} size={size} />
+                    ),
+                  }}
+                />
+                <Tab.Screen
+                  name="Portfolio"
+                  component={PortfolioScreen}
+                  options={{
+                    tabBarIcon: ({ color, size }) => (
+                      <Ionicons name="wallet" color={color} size={size} />
+                    ),
+                  }}
+                />
+                <Tab.Screen
+                  name="Settings"
+                  component={SettingsScreen}
+                  options={{
+                    tabBarIcon: ({ color, size }) => (
+                      <Ionicons name="settings" color={color} size={size} />
+                    ),
+                  }}
+                />
+              </Tab.Navigator>
+            </NavigationContainer>
+          )}
         </SolanaProvider>
       </PhantomProvider>
-    </GestureHandlerRootView>
+    </SafeAreaProvider>
   );
 }
