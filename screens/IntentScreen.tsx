@@ -1,5 +1,14 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Dimensions, Modal, Alert } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+  View,
+  Text,
+  ScrollView,
+  TouchableOpacity,
+  Dimensions,
+  Modal,
+  Alert,
+  Linking,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, {
@@ -9,18 +18,18 @@ import Animated, {
   FadeInUp,
   SlideInRight,
 } from 'react-native-reanimated';
-import { PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
-// Remove Keypair and AsyncStorage imports
+import { LAMPORTS_PER_SOL } from '@solana/web3.js';
+import * as Haptics from 'expo-haptics';
 
 // Import components
 import { FloatingActionButton } from '../components/FloatingActionButton';
 import { IntentBuilder } from '../components/IntentBuilder';
 import { PullToRefresh } from '../components/PullToRefresh';
-import * as Haptics from 'expo-haptics';
 
 // Import IntentFI services
 import { intentFiMobile, networkService, transactionService } from '../services';
 import { useSolana } from '../providers/SolanaProvider';
+import { usePhantomWallet } from '../providers/PhantomProvider';
 
 // Import types
 import type { UserProfile, IntentBuilderData } from '../types';
@@ -28,8 +37,16 @@ import type { UserProfile, IntentBuilderData } from '../types';
 const { width } = Dimensions.get('window');
 
 export function IntentScreen() {
-  const { publicKey, connected, balance, refreshBalances, executeSwapIntent, executeLendIntent } =
-    useSolana();
+  const {
+    publicKey,
+    connected,
+    balance,
+    refreshBalances,
+    executeSwapIntent,
+    executeLendIntent,
+    activeIntents,
+  } = useSolana();
+  const { sharedSecret, session, dappKeyPair, signTransaction } = usePhantomWallet();
 
   const [selectedTab, setSelectedTab] = useState(0);
   const [showIntentBuilder, setShowIntentBuilder] = useState(false);
@@ -42,7 +59,6 @@ export function IntentScreen() {
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(false);
   const [recentIntents, setRecentIntents] = useState<any[]>([]);
-  // Remove walletBalance state
 
   const translateX = useSharedValue(0);
 
@@ -64,7 +80,107 @@ export function IntentScreen() {
     { from: 'SOL', to: 'BONK', description: 'Test swap on devnet', amount: '5 SOL' },
   ];
 
-  const initializeIntentFI = async () => {
+  const fetchUserProfile = useCallback(async () => {
+    if (!publicKey) return;
+
+    const timeout = (ms: number) =>
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(`Timeout after ${ms / 1000} seconds`)), ms)
+      );
+
+    try {
+      console.log('👤 Fetching user profile...');
+      console.log('👤 Public key:', publicKey.toString());
+
+      const [userAccountPDA] =
+        await intentFiMobile.advancedSDK.intentFi.getUserAccountPDA(publicKey);
+      console.log('👤 User Account PDA:', userAccountPDA.toString());
+
+      const userAccountInfo = await networkService.getConnection().getAccountInfo(userAccountPDA);
+
+      if (userAccountInfo) {
+        console.log('✅ User account PDA exists!');
+        console.log('📦 Account data length:', userAccountInfo.data.length);
+        console.log('👑 Account owner:', userAccountInfo.owner.toString());
+
+        const basicProfile: UserProfile = {
+          account: {
+            authority: publicKey,
+            activeIntents: 0,
+            totalIntentsCreated: 0,
+            totalVolume: 0,
+          },
+          intents: [],
+          network: 'devnet',
+          isMainnet: false,
+        };
+
+        console.log('✅ Creating basic profile from existing account');
+        setUserProfile(basicProfile);
+        setRecentIntents([]);
+
+        // Background full profile fetch
+        setTimeout(async () => {
+          try {
+            const fullProfile = (await Promise.race([
+              intentFiMobile.getUserProfile(publicKey),
+              timeout(5000),
+            ])) as UserProfile;
+
+            console.log('✅ Background profile fetch successful');
+            setUserProfile(fullProfile);
+
+            if (fullProfile?.intents) {
+              const formattedIntents = fullProfile.intents.map((intent: any, index: number) => ({
+                id: index + 1,
+                type: intent.intentType,
+                description: `${intent.intentType} ${intent.amount / LAMPORTS_PER_SOL} SOL`,
+                status: intent.status.toLowerCase(),
+                timestamp: new Date(intent.createdAt * 1000).toLocaleString(),
+                value: `${intent.amount / LAMPORTS_PER_SOL} SOL`,
+              }));
+              setRecentIntents(formattedIntents);
+              console.log('👤 Formatted intents:', formattedIntents.length);
+            } else {
+              console.log('👤 No intents found in profile');
+              setRecentIntents([]);
+            }
+          } catch {
+            console.log('⚠️ Background profile fetch failed, keeping basic profile');
+          }
+        }, 100);
+
+        return;
+      }
+
+      // User account doesn't exist
+      console.log('❌ User account PDA does not exist yet');
+      const emptyProfile: UserProfile = {
+        account: null,
+        intents: [],
+        network: 'devnet',
+        isMainnet: false,
+      };
+      setUserProfile(emptyProfile);
+      setRecentIntents([]);
+      console.log('✅ Set empty user profile (account not created yet)');
+    } catch (error: any) {
+      console.error('❌ Failed to fetch user profile:', error);
+      console.error('❌ Error message:', error?.message);
+
+      const fallbackProfile: UserProfile = {
+        account: null,
+        intents: [],
+        network: 'devnet',
+        isMainnet: false,
+      };
+      setUserProfile(fallbackProfile);
+      setRecentIntents([]);
+      console.log('⚠️ Set fallback empty profile due to error');
+    }
+  }, [publicKey]);
+
+  const initializeIntentFI = useCallback(async () => {
     if (!publicKey) return;
 
     try {
@@ -81,32 +197,7 @@ export function IntentScreen() {
     } finally {
       setLoading(false);
     }
-  };
-
-  const fetchUserProfile = async () => {
-    if (!publicKey) return;
-    try {
-      const profile = await intentFiMobile.getUserProfile(publicKey);
-      setUserProfile(profile);
-
-      // Convert intents to display format
-      if (profile?.intents) {
-        const formattedIntents = profile.intents.map((intent: any, index: number) => ({
-          id: index + 1,
-          type: intent.intentType,
-          description: `${intent.intentType} ${intent.amount / LAMPORTS_PER_SOL} SOL`,
-          status: intent.status.toLowerCase(),
-          timestamp: new Date(intent.createdAt * 1000).toLocaleString(),
-          value: `${intent.amount / LAMPORTS_PER_SOL} SOL`,
-        }));
-        setRecentIntents(formattedIntents);
-      }
-
-      console.log('📊 User profile loaded:', profile);
-    } catch (error) {
-      console.error('❌ Failed to fetch user profile:', error);
-    }
-  };
+  }, [publicKey, fetchUserProfile]);
 
   const initializeUserAccount = async () => {
     if (!publicKey || !connected) {
@@ -138,20 +229,133 @@ export function IntentScreen() {
         return;
       }
 
-      console.log('🚀 Wallet ready, initializing user account...');
+      console.log('🚀 Wallet ready, checking protocol state...');
 
-      // Create a mock initialization transaction for demo purposes
-      // In a real implementation, this would use the provider's signing capabilities
-      const mockSignature = 'demo_initialization_' + Date.now().toString();
+      // Check if protocol state exists
+      const [protocolStatePDA] = await intentFiMobile.advancedSDK.intentFi.getProtocolStatePDA();
+      const protocolStateInfo = await networkService
+        .getConnection()
+        .getAccountInfo(protocolStatePDA);
 
-      console.log('✅ User initialized:', mockSignature);
-      Alert.alert(
-        'Success! 🎉',
-        `User account initialized on devnet!\n\n✨ You can now create intents!`
-      );
+      if (!protocolStateInfo) {
+        console.log('⚠️ Protocol state not found, this might be the issue');
+        Alert.alert(
+          'Protocol Not Initialized',
+          'The IntentFI protocol has not been initialized on devnet yet. This could be why the transaction is failing.',
+          [
+            { text: 'OK' },
+            {
+              text: 'Try Anyway',
+              onPress: async () => {
+                console.log('🔄 User chose to try anyway, proceeding...');
+                await proceedWithUserInitialization();
+              },
+            },
+          ]
+        );
+        return;
+      }
 
-      // Fetch updated user profile
-      await fetchUserProfile();
+      console.log('✅ Protocol state found, proceeding with user initialization');
+      await proceedWithUserInitialization();
+    } catch (error: any) {
+      console.error('❌ Failed to check protocol state:', error);
+
+      // Still try to proceed - the error might be something else
+      console.log('🔄 Proceeding despite protocol check error...');
+      await proceedWithUserInitialization();
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const proceedWithUserInitialization = async () => {
+    try {
+      console.log('🚀 Creating IntentFI user initialization transaction...');
+
+      // Ensure publicKey is not null before proceeding
+      if (!publicKey) {
+        console.error('❌ PublicKey is null, cannot proceed');
+        Alert.alert('Error', 'Wallet public key is not available. Please reconnect your wallet.');
+        return;
+      }
+
+      // Create the actual IntentFI user initialization transaction
+      const transaction = await intentFiMobile.advancedSDK.intentFi.initializeUser(publicKey);
+
+      console.log('📦 IntentFI user initialization transaction created');
+      console.log('🔧 Transaction details:', {
+        instructionCount: transaction.instructions.length,
+        programId: networkService.getIntentFiProgramId().toString(),
+      });
+
+      // Log the accounts in the instruction for debugging
+      if (transaction.instructions.length > 0) {
+        const instruction = transaction.instructions[0];
+        console.log(
+          '🔍 Instruction accounts:',
+          instruction.keys.map((key) => ({
+            pubkey: key.pubkey.toString(),
+            isSigner: key.isSigner,
+            isWritable: key.isWritable,
+          }))
+        );
+
+        // Also check if the user account PDA already exists
+        const [userAccountPDA] =
+          await intentFiMobile.advancedSDK.intentFi.getUserAccountPDA(publicKey);
+        console.log('👤 User Account PDA:', userAccountPDA.toString());
+
+        const userAccountInfo = await networkService.getConnection().getAccountInfo(userAccountPDA);
+        if (userAccountInfo) {
+          console.log(
+            '⚠️ User account already exists! This might be why initialization is failing.'
+          );
+          console.log('📦 Existing account data length:', userAccountInfo.data.length);
+          console.log('👑 Account owner:', userAccountInfo.owner.toString());
+        } else {
+          console.log('✅ User account does not exist yet - initialization should work');
+        }
+      }
+
+      // Use the signTransaction function from PhantomProvider
+      if (signTransaction) {
+        const result = await signTransaction(transaction, async () => {
+          // This callback will be called when the transaction is successfully processed
+          console.log('🔄 Transaction successful, refreshing user profile...');
+          await fetchUserProfile();
+          await refreshBalances();
+          console.log('✅ User profile refreshed after successful initialization');
+        });
+
+        if (result) {
+          console.log('✅ Transaction sent to Phantom for signing:', result);
+          Alert.alert(
+            'Account Initialization',
+            'IntentFI user account initialization sent to Phantom for signing. Please check your wallet app.',
+            [{ text: 'OK' }]
+          );
+
+          // Also refresh after a delay to catch successful transactions
+          setTimeout(async () => {
+            console.log('🔄 Auto-refreshing user profile after transaction...');
+            await fetchUserProfile();
+            await refreshBalances();
+          }, 3000); // Wait 3 seconds for transaction to be processed
+        } else {
+          console.error('❌ Transaction signing failed or was rejected');
+          Alert.alert('Transaction Failed', 'Failed to sign the transaction. Please try again.', [
+            { text: 'OK' },
+          ]);
+        }
+      } else {
+        console.error('❌ signTransaction function not available');
+        Alert.alert(
+          'Wallet Error',
+          'Unable to send transaction to Phantom. Please reconnect your wallet.',
+          [{ text: 'OK' }]
+        );
+      }
     } catch (error: any) {
       console.error('❌ Failed to initialize user:', error);
 
@@ -168,10 +372,29 @@ export function IntentScreen() {
         { text: 'OK' },
         { text: 'Try Again', onPress: initializeUserAccount },
       ]);
-    } finally {
-      setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (publicKey && connected) {
+      initializeIntentFI();
+    }
+  }, [publicKey, connected, initializeIntentFI]);
+
+  useEffect(() => {
+    if (sharedSecret && session && dappKeyPair) {
+      console.log('🔑 Shared secret:', sharedSecret);
+      console.log('🔑 Session:', session);
+      console.log('🔑 Dapp key pair:', dappKeyPair);
+    }
+  }, [sharedSecret, session, dappKeyPair]);
+
+  useEffect(() => {
+    if (publicKey && connected && isInitialized) {
+      testProtocolState();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [publicKey, connected, isInitialized]);
 
   const attemptFunding = async () => {
     if (!publicKey || !connected) return;
@@ -233,6 +456,15 @@ export function IntentScreen() {
   };
 
   const handleFABPress = () => {
+    console.log('🎯 FAB pressed');
+    console.log('🔍 Current state:', {
+      publicKey: !!publicKey,
+      connected,
+      userProfileAccount: !!userProfile?.account,
+      selectedTab,
+      showIntentBuilder,
+    });
+
     if (!publicKey || !connected) {
       Alert.alert('Setup Required', 'Please connect your wallet first');
       return;
@@ -243,53 +475,41 @@ export function IntentScreen() {
       return;
     }
 
-    setBuilderIntentType(intentTypes[selectedTab].title.toLowerCase() as any);
-    setShowIntentBuilder(true);
+    const intentType = intentTypes[selectedTab].title.toLowerCase() as any;
+    console.log('🎯 Setting intent type:', intentType);
+
+    setBuilderIntentType(intentType);
+
+    // Small delay to ensure component is ready
+    setTimeout(() => {
+      setShowIntentBuilder(true);
+      console.log('🎯 Modal should now be visible');
+    }, 50);
   };
 
   const handleCreateIntent = async (intentData: IntentBuilderData) => {
-    if (!publicKey || !connected) {
-      Alert.alert('No Wallet', 'Please connect your wallet first');
-      return;
-    }
+    console.log('📝 IntentScreen.handleCreateIntent called with:', intentData);
+
+    // The IntentBuilder already executed the intent and created the transaction
+    // This callback is just for UI updates and cleanup
+    console.log('✅ Intent already executed by IntentBuilder, just updating UI');
 
     try {
       setLoading(true);
-      let signature = '';
 
-      if (intentData.type === 'swap') {
-        // Use provider's executeSwapIntent
-        signature = await executeSwapIntent({
-          fromMint: 'So11111111111111111111111111111111111111112', // SOL
-          toMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC
-          amount: parseFloat(intentData.amount),
-          maxSlippage: intentData.slippage || 300,
-          rugproofEnabled: true,
-        });
-
-        Alert.alert('Swap Intent Created!', `Transaction: ${signature.slice(0, 20)}...`);
-      } else if (intentData.type === 'lend') {
-        // Use provider's executeLendIntent
-        signature = await executeLendIntent({
-          mint: 'So11111111111111111111111111111111111111112', // SOL
-          amount: parseFloat(intentData.amount),
-          minApy: intentData.minApy || 500,
-        });
-
-        Alert.alert('Lend Intent Created!', `Transaction: ${signature.slice(0, 20)}...`);
-      }
-
-      console.log('Creating intent:', intentData, 'Signature:', signature);
+      // Close the modal
       setShowIntentBuilder(false);
 
-      // Refresh user profile
+      // Refresh user profile and balances
       await fetchUserProfile();
       await refreshBalances();
 
+      // Show success feedback
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+
+      console.log('✅ IntentScreen UI updated after intent creation');
     } catch (error: any) {
-      console.error('❌ Intent creation failed:', error);
-      Alert.alert('Error', error.message || 'Failed to create intent', [{ text: 'OK' }]);
+      console.error('❌ Failed to update UI after intent creation:', error);
     } finally {
       setLoading(false);
     }
@@ -317,11 +537,30 @@ export function IntentScreen() {
     }
   };
 
-  useEffect(() => {
-    if (publicKey && connected) {
-      initializeIntentFI();
+  const testProtocolState = async () => {
+    if (!publicKey) return;
+
+    try {
+      console.log('🔍 Testing protocol state...');
+      const [protocolStatePDA] = await intentFiMobile.advancedSDK.intentFi.getProtocolStatePDA();
+      console.log('📍 Protocol State PDA:', protocolStatePDA.toString());
+
+      const protocolStateInfo = await networkService
+        .getConnection()
+        .getAccountInfo(protocolStatePDA);
+      console.log('📊 Protocol State Info:', protocolStateInfo);
+
+      if (protocolStateInfo) {
+        console.log('✅ Protocol state exists');
+        console.log('📦 Data length:', protocolStateInfo.data.length);
+        console.log('👑 Owner:', protocolStateInfo.owner.toString());
+      } else {
+        console.log('❌ Protocol state does not exist');
+      }
+    } catch (error) {
+      console.error('❌ Error checking protocol state:', error);
     }
-  }, [publicKey, connected]);
+  };
 
   return (
     <SafeAreaView className="flex-1 bg-dark-bg">
@@ -372,14 +611,26 @@ export function IntentScreen() {
               </View>
 
               {!userProfile?.account ? (
-                <TouchableOpacity
-                  onPress={initializeUserAccount}
-                  disabled={loading}
-                  className="rounded-lg bg-primary px-4 py-2">
-                  <Text className="font-semibold text-white">
-                    {loading ? 'Setting up...' : 'Activate Account'}
-                  </Text>
-                </TouchableOpacity>
+                <View className="flex-row gap-2">
+                  <TouchableOpacity
+                    onPress={initializeUserAccount}
+                    disabled={loading}
+                    className="rounded-lg  bg-primary px-4 py-2">
+                    <Text className="text-center font-semibold text-white">
+                      {loading ? 'Initializing...' : 'Initialize IntentFI Account'}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={async () => {
+                      console.log('🔄 Manual refresh triggered...');
+                      await fetchUserProfile();
+                      await refreshBalances();
+                    }}
+                    disabled={loading}
+                    className="rounded-lg bg-gray-600 px-3 py-2">
+                    <Ionicons name="refresh" size={20} color="white" />
+                  </TouchableOpacity>
+                </View>
               ) : (
                 <View className="items-end">
                   <Text className="font-semibold text-primary">✓ Active</Text>
@@ -472,10 +723,10 @@ export function IntentScreen() {
         {/* Recent Intents */}
         <Animated.View entering={SlideInRight.duration(600).delay(400)} className="mb-20 px-4">
           <Text className="mb-4 text-lg font-semibold text-white">
-            Recent Intents ({recentIntents.length})
+            Recent Intents ({recentIntents.length + activeIntents.length})
           </Text>
 
-          {recentIntents.length === 0 ? (
+          {recentIntents.length === 0 && activeIntents.length === 0 ? (
             <View className="items-center rounded-xl border border-dark-border bg-dark-card p-6">
               <Ionicons name="flash-outline" size={48} color="#8E8E93" />
               <Text className="mt-4 text-center text-gray-400">
@@ -485,26 +736,86 @@ export function IntentScreen() {
               </Text>
             </View>
           ) : (
-            recentIntents.map((intent) => (
-              <View
-                key={intent.id}
-                className="mb-3 flex-row items-center justify-between rounded-xl border border-dark-border bg-dark-card p-4">
-                <View className="flex-1">
-                  <View className="mb-1 flex-row items-center">
-                    <View
-                      className="mr-3 h-3 w-3 rounded-full"
-                      style={{ backgroundColor: getStatusColor(intent.status) }}
-                    />
-                    <Text className="font-semibold text-white">{intent.type}</Text>
+            <>
+              {/* Show active intents from SolanaProvider first */}
+              {activeIntents
+                .slice()
+                .reverse()
+                .map((intent) => (
+                  <View
+                    key={intent.id}
+                    className="mb-3 flex-row items-center justify-between rounded-xl border border-dark-border bg-dark-card p-4">
+                    <View className="flex-1">
+                      <View className="mb-1 flex-row items-center">
+                        <View
+                          className="mr-3 h-3 w-3 rounded-full"
+                          style={{ backgroundColor: getStatusColor(intent.status) }}
+                        />
+                        <Text className="font-semibold text-white">{intent.type}</Text>
+                        <Text className="ml-2 text-xs text-gray-500">
+                          {intent.status === 'completed' ? 'Blockchain' : 'Processing'}
+                        </Text>
+                      </View>
+                      <Text className="mb-1 text-sm text-gray-400">
+                        {intent.params?.amount || 'N/A'}{' '}
+                        {intent.params?.fromMint === 'So11111111111111111111111111111111111111112'
+                          ? 'SOL'
+                          : 'tokens'}
+                      </Text>
+                      <Text className="text-xs text-gray-500">
+                        {new Date(intent.createdAt).toLocaleString()}
+                      </Text>
+                      {intent.txId &&
+                        intent.txId !== 'pending_signature' &&
+                        intent.status === 'completed' && (
+                          <TouchableOpacity
+                            onPress={() => {
+                              if (intent.txId?.length === 88) {
+                                // Real Solana signature length
+                                Linking.openURL(
+                                  `https://explorer.solana.com/tx/${intent.txId}?cluster=devnet`
+                                );
+                              }
+                            }}
+                            className="mt-1">
+                            <Text className="text-xs text-blue-400 underline">
+                              View on Explorer: {intent.txId?.slice(0, 8)}...
+                              {intent.txId?.slice(-8)}
+                            </Text>
+                          </TouchableOpacity>
+                        )}
+                    </View>
+                    <Text
+                      className="font-semibold"
+                      style={{ color: getStatusColor(intent.status) }}>
+                      {intent.status.toUpperCase()}
+                    </Text>
                   </View>
-                  <Text className="mb-1 text-sm text-gray-400">{intent.description}</Text>
-                  <Text className="text-xs text-gray-500">{intent.timestamp}</Text>
+                ))}
+
+              {/* Show IntentFI intents */}
+              {recentIntents.map((intent) => (
+                <View
+                  key={intent.id}
+                  className="mb-3 flex-row items-center justify-between rounded-xl border border-dark-border bg-dark-card p-4">
+                  <View className="flex-1">
+                    <View className="mb-1 flex-row items-center">
+                      <View
+                        className="mr-3 h-3 w-3 rounded-full"
+                        style={{ backgroundColor: getStatusColor(intent.status) }}
+                      />
+                      <Text className="font-semibold text-white">{intent.type}</Text>
+                      <Text className="ml-2 text-xs text-gray-500">IntentFI</Text>
+                    </View>
+                    <Text className="mb-1 text-sm text-gray-400">{intent.description}</Text>
+                    <Text className="text-xs text-gray-500">{intent.timestamp}</Text>
+                  </View>
+                  <Text className="font-semibold" style={{ color: getStatusColor(intent.status) }}>
+                    {intent.value}
+                  </Text>
                 </View>
-                <Text className="font-semibold" style={{ color: getStatusColor(intent.status) }}>
-                  {intent.value}
-                </Text>
-              </View>
-            ))
+              ))}
+            </>
           )}
         </Animated.View>
       </PullToRefresh>
@@ -515,10 +826,23 @@ export function IntentScreen() {
       )}
 
       {/* Intent Builder Modal */}
-      <Modal visible={showIntentBuilder} animationType="slide" presentationStyle="pageSheet">
+      <Modal
+        visible={showIntentBuilder}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        transparent={false}
+        statusBarTranslucent={true}
+        onRequestClose={() => {
+          console.log('🚪 Modal onRequestClose called');
+          setShowIntentBuilder(false);
+        }}>
         <IntentBuilder
+          key={`${builderIntentType}-${showIntentBuilder}`}
           intentType={builderIntentType}
-          onClose={() => setShowIntentBuilder(false)}
+          onClose={() => {
+            console.log('🚪 IntentBuilder onClose called');
+            setShowIntentBuilder(false);
+          }}
           onCreateIntent={handleCreateIntent}
         />
       </Modal>

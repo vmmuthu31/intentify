@@ -1,5 +1,11 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { Connection, PublicKey, LAMPORTS_PER_SOL, clusterApiUrl } from '@solana/web3.js';
+import {
+  Connection,
+  PublicKey,
+  LAMPORTS_PER_SOL,
+  clusterApiUrl,
+  Transaction,
+} from '@solana/web3.js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 
@@ -11,6 +17,7 @@ import {
   SwapIntentParams,
   LendIntentParams,
   BuyIntentParams,
+  PhantomWalletInterface,
 } from '../contracts/IntentExecutor';
 
 interface TokenBalance {
@@ -82,7 +89,14 @@ export function SolanaProvider({ children }: SolanaProviderProps) {
   const [intentExecutor, setIntentExecutor] = useState<IntentExecutor | null>(null);
 
   // Get Phantom wallet state
-  const { isLoggedIn: phantomLoggedIn, solanaPublicKey: phantomPublicKey } = usePhantomWallet();
+  const {
+    isLoggedIn: phantomLoggedIn,
+    solanaPublicKey: phantomPublicKey,
+    signTransaction,
+    sharedSecret,
+    session,
+    dappKeyPair,
+  } = usePhantomWallet();
 
   // Check for existing connection on app start
   useEffect(() => {
@@ -134,13 +148,51 @@ export function SolanaProvider({ children }: SolanaProviderProps) {
   // Initialize intent executor when wallet connects
   useEffect(() => {
     if (publicKey) {
-      const executor = createIntentExecutor(connection, publicKey);
+      // Create phantom wallet interface for IntentExecutor
+      const phantomWalletInterface = {
+        signTransaction: (transaction: Transaction, onSuccess?: () => void) => {
+          // Wrap the original signTransaction to handle success callbacks
+          return signTransaction(transaction, () => {
+            console.log('✅ Transaction completed successfully in SolanaProvider');
+            console.log('🔍 Success callback details:', {
+              hasOnSuccess: !!onSuccess,
+              callbackName: onSuccess?.name || 'anonymous',
+            });
+
+            if (onSuccess) {
+              console.log('🔄 Calling onSuccess callback from SolanaProvider');
+              try {
+                onSuccess();
+              } catch (error) {
+                console.error('❌ Error in onSuccess callback:', error);
+              }
+            }
+            // Refresh balances after successful transaction
+            console.log('🔄 Refreshing balances after successful transaction');
+            refreshBalances();
+          });
+        },
+        sharedSecret,
+        session,
+        dappKeyPair,
+        solanaPublicKey: phantomPublicKey,
+      };
+
+      const executor = createIntentExecutor(connection, publicKey, phantomWalletInterface);
       setIntentExecutor(executor);
       loadIntentHistory();
     } else {
       setIntentExecutor(null);
     }
-  }, [publicKey, connection]);
+  }, [
+    publicKey,
+    connection,
+    signTransaction,
+    phantomPublicKey,
+    sharedSecret,
+    session,
+    dappKeyPair,
+  ]);
 
   const checkExistingConnection = async () => {
     try {
@@ -260,6 +312,29 @@ export function SolanaProvider({ children }: SolanaProviderProps) {
       throw new Error('Intent executor not initialized');
     }
 
+    if (!publicKey) {
+      throw new Error('Wallet not connected');
+    }
+
+    console.log('🔍 executeSwapIntent called with params:', params);
+
+    // Check for recent duplicate intents (within last 5 seconds) to prevent accidental double-execution
+    const recentDuplicateIntent = activeIntents.find(
+      (intent) =>
+        intent.type === 'swap' &&
+        intent.status === 'executing' &&
+        Math.abs(intent.params.amount - params.amount) < 0.0001 && // Same amount
+        intent.params.rugproofEnabled === params.rugproofEnabled && // Same rugproof setting
+        Date.now() - new Date(intent.createdAt).getTime() < 5000 // Created within last 5 seconds
+    );
+
+    if (recentDuplicateIntent) {
+      console.log(
+        '⚠️ Recent duplicate swap intent detected (within 5 seconds), returning existing'
+      );
+      return recentDuplicateIntent.txId || 'pending_signature';
+    }
+
     const intentId = `swap_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
     // Add to active intents
@@ -281,24 +356,83 @@ export function SolanaProvider({ children }: SolanaProviderProps) {
         )
       );
 
-      console.log('🚀 Executing swap intent with 0.3% protocol fee...');
+      console.log('🚀 Executing REAL swap intent with devnet contract and 0.3% protocol fee...');
 
-      // Execute via contract
-      const txId = await intentExecutor.executeSwapIntent(params);
+      // Execute the real swap intent with a success callback to update status
+      console.log('🔍 Setting up success callback for intent:', intentId);
+      const successCallback = () => {
+        console.log('🎉 SUCCESS CALLBACK TRIGGERED! Swap transaction confirmed on blockchain');
+        console.log('🔄 Updating intent status from executing to completed for:', intentId);
+        console.log(
+          '🔍 Current activeIntents before update:',
+          activeIntents.map((i) => ({ id: i.id, status: i.status }))
+        );
 
-      // Update status to completed
-      setActiveIntents((prev) =>
-        prev.map((intent) =>
-          intent.id === intentId ? { ...intent, status: 'completed' as const, txId } : intent
-        )
-      );
+        // Update intent status to completed when transaction is confirmed
+        setActiveIntents((prev) => {
+          console.log(
+            '🔍 Previous intents in callback:',
+            prev.map((i) => ({ id: i.id, status: i.status }))
+          );
+          const updated = prev.map((intent) =>
+            intent.id === intentId ? { ...intent, status: 'completed' as const } : intent
+          );
+          console.log(
+            '📝 Updated intents:',
+            updated.map((i) => ({ id: i.id, status: i.status }))
+          );
+          const targetIntent = updated.find((i) => i.id === intentId);
+          console.log('📝 Target intent after update:', targetIntent);
+          return updated;
+        });
 
-      // Refresh balances after execution
-      await refreshBalances();
-      await saveIntentHistory();
+        // Save updated history
+        saveIntentHistory();
+        console.log('✅ Intent status update completed for intentId:', intentId);
+      };
 
-      return txId;
+      console.log('🚀 Calling executeSwapIntent with success callback');
+      const txId = await intentExecutor.executeSwapIntent(params, successCallback);
+
+      console.log('📦 Real swap intent result:', {
+        txId,
+        fromMint: params.fromMint,
+        toMint: params.toMint,
+        amount: params.amount,
+      });
+
+      if (txId === 'pending_signature' || txId === 'transaction_sent_to_phantom_for_signing') {
+        console.log('📤 Transaction sent to Phantom for signing');
+
+        // Update status to show it's pending signature with the transaction ID
+        setActiveIntents((prev) =>
+          prev.map((intent) =>
+            intent.id === intentId
+              ? { ...intent, status: 'executing' as const, txId: 'pending_signature' }
+              : intent
+          )
+        );
+
+        return 'pending_signature';
+      } else {
+        console.log('✅ Real swap transaction completed:', txId);
+
+        // Update with completed transaction info
+        setActiveIntents((prev) =>
+          prev.map((intent) =>
+            intent.id === intentId ? { ...intent, status: 'completed' as const, txId } : intent
+          )
+        );
+
+        // Refresh balances after execution
+        await refreshBalances();
+        await saveIntentHistory();
+
+        return txId;
+      }
     } catch (error) {
+      console.error('❌ Real swap intent execution failed:', error);
+
       // Update status to failed
       setActiveIntents((prev) =>
         prev.map((intent) =>
@@ -342,12 +476,21 @@ export function SolanaProvider({ children }: SolanaProviderProps) {
 
       console.log('🏦 Executing lend intent with 0.3% protocol fee...');
 
-      const txId = await intentExecutor.executeLendIntent(params);
+      const txId = await intentExecutor.executeLendIntent(params, () => {
+        console.log('🎉 Lend transaction confirmed on blockchain, updating intent status');
+        // Update intent status to completed when transaction is confirmed
+        setActiveIntents((prev) =>
+          prev.map((intent) =>
+            intent.id === intentId ? { ...intent, status: 'completed' as const } : intent
+          )
+        );
+        // Save updated history
+        saveIntentHistory();
+      });
 
+      // Update with transaction ID immediately (status will be updated by callback)
       setActiveIntents((prev) =>
-        prev.map((intent) =>
-          intent.id === intentId ? { ...intent, status: 'completed' as const, txId } : intent
-        )
+        prev.map((intent) => (intent.id === intentId ? { ...intent, txId } : intent))
       );
 
       await refreshBalances();
@@ -397,12 +540,21 @@ export function SolanaProvider({ children }: SolanaProviderProps) {
 
       console.log('💳 Executing buy intent with 0.3% protocol fee...');
 
-      const txId = await intentExecutor.executeBuyIntent(params);
+      const txId = await intentExecutor.executeBuyIntent(params, () => {
+        console.log('🎉 Buy transaction confirmed on blockchain, updating intent status');
+        // Update intent status to completed when transaction is confirmed
+        setActiveIntents((prev) =>
+          prev.map((intent) =>
+            intent.id === intentId ? { ...intent, status: 'completed' as const } : intent
+          )
+        );
+        // Save updated history
+        saveIntentHistory();
+      });
 
+      // Update with transaction ID immediately (status will be updated by callback)
       setActiveIntents((prev) =>
-        prev.map((intent) =>
-          intent.id === intentId ? { ...intent, status: 'completed' as const, txId } : intent
-        )
+        prev.map((intent) => (intent.id === intentId ? { ...intent, txId } : intent))
       );
 
       await refreshBalances();

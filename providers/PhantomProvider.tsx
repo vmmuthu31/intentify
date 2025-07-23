@@ -7,6 +7,8 @@ import * as Linking from 'expo-linking';
 import nacl from 'tweetnacl';
 import bs58 from 'bs58';
 import { Buffer } from 'buffer';
+import { Transaction } from '@solana/web3.js';
+import { Connection, clusterApiUrl } from '@solana/web3.js';
 
 // Conditional import for mobile wallet adapter - works around Expo managed workflow issues
 let transact: any;
@@ -35,7 +37,16 @@ interface PhantomContextType {
   solanaPublicKey: PublicKey | null;
   showLoginOptions: () => void;
   logout: () => void;
+  disconnect: () => void;
   connecting: boolean;
+  sharedSecret: Uint8Array | undefined;
+  session: string | undefined;
+  dappKeyPair: nacl.BoxKeyPair;
+  signTransaction: (
+    transaction: Transaction,
+    onSuccess?: () => void
+  ) => Promise<string | undefined>;
+  signAllTransactions: (transactions: Transaction[]) => Promise<Transaction[] | undefined>;
 }
 
 const PhantomContext = createContext<PhantomContextType | undefined>(undefined);
@@ -76,6 +87,14 @@ export function PhantomProvider({ children }: { children: ReactNode }) {
   const [dappKeyPair] = useState(nacl.box.keyPair());
   const [sharedSecret, setSharedSecret] = useState<Uint8Array>();
   const [session, setSession] = useState<string>();
+  const [onTransactionSuccess, setOnTransactionSuccess] = useState<(() => void) | null>(null);
+
+  // Create redirect links for deep linking
+  const onConnectRedirectLink = Linking.createURL('onConnect');
+  const onDisconnectRedirectLink = Linking.createURL('onDisconnect');
+  const onSignAllTransactionsRedirectLink = Linking.createURL('onSignAllTransactions');
+  const onSignTransactionRedirectLink = Linking.createURL('onSignTransaction');
+  const onSignMessageRedirectLink = Linking.createURL('onSignMessage');
 
   // Deep link handling setup
   useEffect(() => {
@@ -127,9 +146,27 @@ export function PhantomProvider({ children }: { children: ReactNode }) {
       }
 
       // Handle a connect response from Phantom
-      if (/onConnect/.test(url.pathname)) {
+      if (/onConnect/.test(url.pathname || url.host)) {
         console.log('✅ Received connect response from Phantom');
         handlePhantomConnectResponse(params);
+      }
+
+      // Handle a disconnect response from Phantom
+      if (/onDisconnect/.test(url.pathname || url.host)) {
+        console.log('✅ Received disconnect response from Phantom');
+        logout();
+      }
+
+      // Handle a signTransaction response from Phantom
+      if (/onSignTransaction/.test(url.pathname || url.host)) {
+        console.log('✅ Received signTransaction response from Phantom');
+        handleSignTransactionResponse(params);
+      }
+
+      // Handle a signAllTransactions response from Phantom
+      if (/onSignAllTransactions/.test(url.pathname || url.host)) {
+        console.log('✅ Received signAllTransactions response from Phantom');
+        handleSignAllTransactionsResponse(params);
       }
 
       // Clear the deeplink after processing
@@ -151,24 +188,18 @@ export function PhantomProvider({ children }: { children: ReactNode }) {
         throw new Error('Missing required parameters from Phantom response');
       }
 
-      // Decrypt the response
-      const phantomPublicKey = bs58.decode(phantomEncryptionPublicKey);
-      const sharedSecret = nacl.box.before(phantomPublicKey, dappKeyPair.secretKey);
-      const decryptedData = nacl.box.open.after(
-        bs58.decode(data),
-        bs58.decode(nonce),
-        sharedSecret
+      // Create shared secret using the reference implementation approach
+      const sharedSecretDapp = nacl.box.before(
+        bs58.decode(phantomEncryptionPublicKey),
+        dappKeyPair.secretKey
       );
 
-      if (!decryptedData) {
-        throw new Error('Failed to decrypt Phantom response');
-      }
+      // Decrypt the response using the helper function
+      const connectData = decryptPayload(data, nonce, sharedSecretDapp);
+      console.log('🔓 Decrypted Phantom response:', connectData);
 
-      const responseData = JSON.parse(Buffer.from(decryptedData).toString('utf8'));
-      console.log('🔓 Decrypted Phantom response:', responseData);
-
-      if (responseData.public_key) {
-        const publicKey = new PublicKey(responseData.public_key);
+      if (connectData.public_key) {
+        const publicKey = new PublicKey(connectData.public_key);
 
         // Store wallet info
         await AsyncStorage.setItem('wallet_connected', 'true');
@@ -179,8 +210,8 @@ export function PhantomProvider({ children }: { children: ReactNode }) {
         // Update state
         setSolanaPublicKey(publicKey);
         setIsLoggedIn(true);
-        setSharedSecret(sharedSecret);
-        setSession(responseData.session);
+        setSharedSecret(sharedSecretDapp);
+        setSession(connectData.session);
 
         console.log('✅ Real Phantom wallet connected via deep linking:', publicKey.toString());
       }
@@ -196,6 +227,117 @@ export function PhantomProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const handleSignTransactionResponse = async (params: URLSearchParams) => {
+    try {
+      const nonce = params.get('nonce');
+      const data = params.get('data');
+
+      if (!nonce || !data) {
+        throw new Error('Missing required parameters for signTransaction response');
+      }
+
+      // Decrypt the response using the helper function
+      const signTransactionData = decryptPayload(data, nonce, sharedSecret);
+      console.log('🔓 Decrypted signTransaction payload:', signTransactionData);
+
+      if (signTransactionData.transaction) {
+        console.log('✅ signTransaction successful - transaction signed by Phantom');
+
+        try {
+          // Decode the signed transaction
+          const signedTransaction = Transaction.from(bs58.decode(signTransactionData.transaction));
+          console.log('📦 Signed transaction received:', {
+            signatures: signedTransaction.signatures.length,
+            instructions: signedTransaction.instructions.length,
+          });
+
+          // Send the signed transaction to the blockchain
+          const connection = new Connection(clusterApiUrl('devnet'));
+          const txId = await connection.sendRawTransaction(signedTransaction.serialize());
+          console.log('🚀 Transaction sent to blockchain:', txId);
+
+          // Confirm the transaction
+          const confirmation = await connection.confirmTransaction(txId, 'confirmed');
+          console.log('✅ Transaction confirmed:', confirmation);
+
+          console.log('🔍 Checking onTransactionSuccess callback:', {
+            hasCallback: !!onTransactionSuccess,
+            callbackType: typeof onTransactionSuccess,
+          });
+
+          if (onTransactionSuccess) {
+            console.log('🎉 Calling onTransactionSuccess callback to update intent status');
+            onTransactionSuccess();
+            console.log('✅ onTransactionSuccess callback completed');
+          } else {
+            console.log(
+              '⚠️ No onTransactionSuccess callback found - intent status will not be updated'
+            );
+          }
+
+          Alert.alert(
+            'Transaction Successful! 🎉',
+            `Your transaction has been confirmed on the blockchain.\n\nTransaction ID: ${txId.slice(0, 8)}...`,
+            [{ text: 'Great!', style: 'default' }]
+          );
+        } catch (sendError) {
+          console.error('❌ Failed to send signed transaction:', sendError);
+          Alert.alert(
+            'Transaction Failed',
+            `The transaction was signed but failed to send to the blockchain: ${sendError instanceof Error ? sendError.message : 'Unknown error'}`
+          );
+        }
+      } else if (signTransactionData.signature) {
+        console.log('✅ signTransaction successful - signature received');
+        if (onTransactionSuccess) {
+          onTransactionSuccess();
+        }
+      } else {
+        console.error('❌ signTransaction failed:', signTransactionData.error);
+        Alert.alert('Transaction Error', signTransactionData.error || 'signTransaction failed.');
+      }
+    } catch (error: any) {
+      console.error('❌ Failed to process signTransaction response:', error);
+      Alert.alert(
+        'Transaction Error',
+        error?.message || 'Failed to process signTransaction response.'
+      );
+    }
+  };
+
+  const handleSignAllTransactionsResponse = async (params: URLSearchParams) => {
+    try {
+      const nonce = params.get('nonce');
+      const data = params.get('data');
+
+      if (!nonce || !data) {
+        throw new Error('Missing required parameters for signAllTransactions response');
+      }
+
+      // Decrypt the response using the helper function
+      const signAllTransactionsData = decryptPayload(data, nonce, sharedSecret);
+      console.log('🔓 Decrypted signAllTransactions payload:', signAllTransactionsData);
+
+      if (signAllTransactionsData.transactions) {
+        console.log('✅ signAllTransactions successful');
+        // The actual signing process is handled by the deep link redirect,
+        // so we just acknowledge receipt of the response.
+      } else {
+        console.error('❌ signAllTransactions failed:', signAllTransactionsData.error);
+        Alert.alert(
+          'Transaction Error',
+          signAllTransactionsData.error || 'signAllTransactions failed.'
+        );
+      }
+    } catch (error) {
+      console.error('❌ Failed to process signAllTransactions response:', error);
+      Alert.alert(
+        'Transaction Error',
+        error instanceof Error ? error.message : 'Failed to process signAllTransactions response.'
+      );
+    }
+  };
+
   const showLoginOptions = async () => {
     setConnecting(true);
 
@@ -206,9 +348,7 @@ export function PhantomProvider({ children }: { children: ReactNode }) {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       }
 
-      // Create the redirect URL for Phantom to call back
-      const onConnectRedirectLink = Linking.createURL('onConnect');
-      console.log('🔗 Created redirect link:', onConnectRedirectLink);
+      console.log('🔗 Using redirect link:', onConnectRedirectLink);
 
       // In production, this would be: intentify://onConnect
       // In Expo dev, this becomes: exp://192.168.x.x:8081/--/onConnect
@@ -221,7 +361,7 @@ export function PhantomProvider({ children }: { children: ReactNode }) {
         redirect_link: onConnectRedirectLink,
       });
 
-      const connectUrl = `https://phantom.app/ul/v1/connect?${params.toString()}`;
+      const connectUrl = buildUrl('connect', params);
       console.log('🦄 Opening Phantom with connect URL:', connectUrl);
 
       // Open Phantom with the connection request (skip canOpenURL check for HTTPS)
@@ -472,10 +612,40 @@ export function PhantomProvider({ children }: { children: ReactNode }) {
       // Update state
       setIsLoggedIn(false);
       setSolanaPublicKey(null);
+      setSharedSecret(undefined);
+      setSession(undefined);
 
       Alert.alert('Phantom Disconnected', 'Successfully logged out of Phantom wallet.');
     } catch (error) {
       console.error('Logout error:', error);
+    }
+  };
+
+  const disconnect = async () => {
+    if (!session || !sharedSecret) {
+      console.log('No active session to disconnect');
+      return logout();
+    }
+
+    try {
+      const payload = {
+        session,
+      };
+      const [nonce, encryptedPayload] = encryptPayload(payload, sharedSecret);
+
+      const params = new URLSearchParams({
+        dapp_encryption_public_key: bs58.encode(dappKeyPair.publicKey),
+        nonce: bs58.encode(nonce),
+        redirect_link: onDisconnectRedirectLink,
+        payload: bs58.encode(encryptedPayload),
+      });
+
+      const url = buildUrl('disconnect', params);
+      await Linking.openURL(url);
+    } catch (error) {
+      console.error('Disconnect error:', error);
+      // Fallback to logout if disconnect fails
+      logout();
     }
   };
 
@@ -484,8 +654,183 @@ export function PhantomProvider({ children }: { children: ReactNode }) {
     solanaPublicKey,
     showLoginOptions,
     logout,
+    disconnect,
     connecting,
+    sharedSecret,
+    session,
+    dappKeyPair,
+    signTransaction: async (transaction, onSuccess) => {
+      if (!sharedSecret || !session) {
+        console.error('Phantom session not available for signing.');
+        Alert.alert('Connection Error', 'Please reconnect your Phantom wallet.');
+        return undefined;
+      }
+
+      try {
+        console.log('🚀 Starting Phantom transaction signing...');
+
+        // Set transaction properties
+        transaction.feePayer = solanaPublicKey as PublicKey;
+        const connection = new Connection(clusterApiUrl('devnet'));
+        const { blockhash } = await connection.getLatestBlockhash();
+        transaction.recentBlockhash = blockhash;
+
+        // Debug transaction before serialization
+        console.log('🔍 Transaction debug info:');
+        console.log('  - Instructions count:', transaction.instructions.length);
+        console.log('  - Fee payer:', transaction.feePayer?.toString());
+        console.log('  - Recent blockhash:', transaction.recentBlockhash);
+
+        // Ensure transaction has all required fields for Phantom
+        if (!transaction.feePayer) {
+          transaction.feePayer = solanaPublicKey as PublicKey;
+          console.log('🔧 Set fee payer to connected wallet');
+        }
+
+        if (!transaction.recentBlockhash) {
+          const { blockhash } = await connection.getLatestBlockhash('confirmed');
+          transaction.recentBlockhash = blockhash;
+          console.log('🔧 Set recent blockhash:', blockhash);
+        }
+
+        if (transaction.instructions.length > 0) {
+          const instruction = transaction.instructions[0];
+          console.log('  - First instruction program:', instruction.programId.toString());
+          console.log('  - First instruction data length:', instruction.data.length);
+          console.log('  - First instruction accounts:', instruction.keys.length);
+
+          // Validate instruction accounts
+          instruction.keys.forEach((key, index) => {
+            console.log(
+              `    Account ${index}: ${key.pubkey.toString()} (signer: ${key.isSigner}, writable: ${key.isWritable})`
+            );
+          });
+        }
+
+        // Serialize transaction
+        const serializedTransaction = bs58.encode(
+          transaction.serialize({
+            requireAllSignatures: false,
+          })
+        );
+
+        const payload = {
+          session,
+          transaction: serializedTransaction,
+        };
+
+        const [nonce, encryptedPayload] = encryptPayload(payload, sharedSecret);
+
+        const params = new URLSearchParams({
+          dapp_encryption_public_key: bs58.encode(dappKeyPair.publicKey),
+          nonce: bs58.encode(nonce),
+          redirect_link: onSignTransactionRedirectLink,
+          payload: bs58.encode(encryptedPayload),
+        });
+
+        const url = buildUrl('signTransaction', params);
+
+        // Store the success callback
+        if (onSuccess) {
+          console.log('🔍 Storing onSuccess callback in PhantomProvider');
+          console.log('🔍 Callback type:', typeof onSuccess);
+          setOnTransactionSuccess(() => onSuccess);
+          console.log('✅ Success callback stored in PhantomProvider state');
+        } else {
+          console.log('⚠️ No onSuccess callback provided to signTransaction');
+        }
+
+        await Linking.openURL(url);
+        console.log('✅ Transaction sent to Phantom for signing');
+
+        return 'transaction_sent_to_phantom_for_signing';
+      } catch (error: any) {
+        console.error('❌ Failed to send transaction to Phantom:', error);
+        Alert.alert('Transaction Error', error.message || 'Failed to send transaction to Phantom.');
+        return undefined;
+      }
+    },
+    signAllTransactions: async (transactions) => {
+      if (!sharedSecret || !session) {
+        console.error('Phantom session not available for signing.');
+        return undefined;
+      }
+
+      try {
+        // Set required properties on all transactions
+        for (const transaction of transactions) {
+          transaction.feePayer = solanaPublicKey as PublicKey;
+          const connection = new Connection(clusterApiUrl('devnet'));
+          const { blockhash } = await connection.getLatestBlockhash();
+          transaction.recentBlockhash = blockhash;
+        }
+
+        const serializedTransactions = transactions.map((t) =>
+          bs58.encode(
+            t.serialize({
+              requireAllSignatures: false,
+            })
+          )
+        );
+
+        const payload = {
+          session,
+          transactions: serializedTransactions,
+        };
+
+        const [nonce, encryptedPayload] = encryptPayload(payload, sharedSecret);
+
+        const params = new URLSearchParams({
+          dapp_encryption_public_key: bs58.encode(dappKeyPair.publicKey),
+          nonce: bs58.encode(nonce),
+          redirect_link: onSignAllTransactionsRedirectLink,
+          payload: bs58.encode(encryptedPayload),
+        });
+
+        const url = buildUrl('signAllTransactions', params);
+        await Linking.openURL(url);
+
+        return undefined; // Will be handled in deep link response
+      } catch (error: any) {
+        console.error('❌ Failed to send transactions to Phantom:', error);
+        Alert.alert(
+          'Transaction Error',
+          error.message || 'Failed to send transactions to Phantom.'
+        );
+        return undefined;
+      }
+    },
   };
 
   return <PhantomContext.Provider value={contextValue}>{children}</PhantomContext.Provider>;
+}
+
+// Helper function to decrypt payload using nacl.box
+function decryptPayload(data: string, nonce: string, sharedSecret?: Uint8Array) {
+  if (!sharedSecret) throw new Error('missing shared secret');
+
+  const decryptedData = nacl.box.open.after(bs58.decode(data), bs58.decode(nonce), sharedSecret);
+  if (!decryptedData) {
+    throw new Error('Unable to decrypt data');
+  }
+  return JSON.parse(Buffer.from(decryptedData).toString('utf8'));
+}
+
+// Helper function to encrypt payload using nacl.box
+function encryptPayload(payload: any, sharedSecret?: Uint8Array) {
+  if (!sharedSecret) throw new Error('missing shared secret');
+
+  const nonce = nacl.randomBytes(24);
+  const encrypted = nacl.box.after(Buffer.from(JSON.stringify(payload)), nonce, sharedSecret);
+  return [nonce, encrypted];
+}
+
+// Helper function to build the full URL for deep linking
+/**
+ * If true, uses universal links instead of deep links. This is the recommended way for dapps
+ * and Phantom to handle deeplinks as we own the phantom.app domain.
+ */
+const useUniversalLinks = true;
+function buildUrl(path: string, params: URLSearchParams) {
+  return `${useUniversalLinks ? 'https://phantom.app/ul/' : 'phantom://'}v1/${path}?${params.toString()}`;
 }

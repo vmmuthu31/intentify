@@ -72,6 +72,13 @@ export function IntentBuilder({ intentType, onClose, onCreateIntent }: IntentBui
   };
 
   const handleCreateIntent = async () => {
+    // Prevent double execution
+    if (executing) {
+      console.log('⚠️ Intent creation already in progress, ignoring duplicate call');
+      console.log('📍 Call stack trace:', new Error().stack);
+      return;
+    }
+
     if (!fromToken || !toToken || !amount) {
       Alert.alert('Missing Information', 'Please fill in all required fields');
       return;
@@ -83,6 +90,12 @@ export function IntentBuilder({ intentType, onClose, onCreateIntent }: IntentBui
       return;
     }
 
+    console.log('🚀 Starting intent creation process...');
+    console.log('📝 Current token state:', {
+      fromToken: fromToken.symbol,
+      toToken: toToken.symbol,
+      amount: numericAmount,
+    });
     setExecuting(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
@@ -91,29 +104,56 @@ export function IntentBuilder({ intentType, onClose, onCreateIntent }: IntentBui
       const protocolFee = calculateProtocolFee(numericAmount);
       const netAmount = numericAmount - protocolFee;
 
-      console.log(`🚀 Creating ${intentType} intent:`);
+      console.log(`🚀 Creating REAL ${intentType} intent with devnet contract:`);
       console.log(`📊 Amount: ${numericAmount} ${fromToken.symbol}`);
       console.log(`💰 Protocol Fee (0.3%): ${protocolFee} ${fromToken.symbol}`);
       console.log(`💎 Net Amount: ${netAmount} ${fromToken.symbol}`);
 
       if (intentType === 'swap') {
-        txId = await executeSwapIntent({
+        // Convert slippage percentage to basis points (e.g., 0.5% = 50 basis points)
+        const slippageBasisPoints = Math.floor(parseFloat(conditions.maxSlippage) * 100);
+
+        console.log('📝 Executing swap intent with params:', {
           fromMint: fromToken.symbol,
           toMint: toToken.symbol,
           amount: numericAmount,
-          maxSlippage: parseFloat(conditions.maxSlippage),
+          maxSlippage: slippageBasisPoints,
           rugproofEnabled,
         });
 
-        Alert.alert(
-          'Swap Intent Created! 🎉',
-          `Successfully created swap intent:\n\n` +
-            `• ${netAmount.toFixed(4)} ${fromToken.symbol} → ${toToken.symbol}\n` +
-            `• Protocol Fee: ${protocolFee.toFixed(4)} ${fromToken.symbol} (0.3%)\n` +
-            `• Rugproof: ${rugproofEnabled ? 'Enabled' : 'Disabled'}\n` +
-            `• Transaction: ${txId.slice(0, 8)}...`,
-          [{ text: 'Great!', onPress: () => onClose() }]
-        );
+        txId = await executeSwapIntent({
+          fromMint: fromToken.symbol, // This will be converted to proper mint address in IntentExecutor
+          toMint: toToken.symbol,
+          amount: numericAmount,
+          maxSlippage: slippageBasisPoints,
+          rugproofEnabled,
+        });
+
+        console.log('✅ Swap intent execution completed with txId:', txId);
+
+        if (txId === 'pending_signature' || txId === 'transaction_sent_to_phantom_for_signing') {
+          Alert.alert(
+            'Swap Intent Sent to Phantom! 🦄',
+            `Your swap intent has been sent to Phantom for signing:\n\n` +
+              `• ${netAmount.toFixed(4)} ${fromToken.symbol} → ${toToken.symbol}\n` +
+              `• Protocol Fee: ${protocolFee.toFixed(4)} ${fromToken.symbol} (0.3%)\n` +
+              `• Max Slippage: ${conditions.maxSlippage}%\n` +
+              `• Rugproof: ${rugproofEnabled ? 'Enabled' : 'Disabled'}\n\n` +
+              `Please check your Phantom wallet to sign the transaction.`,
+            [{ text: 'Got it!', onPress: () => onClose() }]
+          );
+        } else {
+          Alert.alert(
+            'Swap Intent Created! 🎉',
+            `Successfully created swap intent:\n\n` +
+              `• ${netAmount.toFixed(4)} ${fromToken.symbol} → ${toToken.symbol}\n` +
+              `• Protocol Fee: ${protocolFee.toFixed(4)} ${fromToken.symbol} (0.3%)\n` +
+              `• Max Slippage: ${conditions.maxSlippage}%\n` +
+              `• Rugproof: ${rugproofEnabled ? 'Enabled' : 'Disabled'}\n` +
+              `• Transaction: ${txId?.slice(0, 8)}...`,
+            [{ text: 'Great!', onPress: () => onClose() }]
+          );
+        }
       } else if (intentType === 'lend') {
         const minApy = 8.0; // Default minimum APY
 
@@ -154,6 +194,17 @@ export function IntentBuilder({ intentType, onClose, onCreateIntent }: IntentBui
       }
 
       // Call the callback with intent data
+      console.log('Creating intent:', {
+        type: intentType,
+        fromToken,
+        toToken,
+        amount: numericAmount,
+        conditions,
+        rugproofEnabled,
+        txId,
+        createdAt: new Date().toISOString(),
+      });
+
       onCreateIntent({
         type: intentType,
         fromToken,
@@ -183,16 +234,16 @@ export function IntentBuilder({ intentType, onClose, onCreateIntent }: IntentBui
       {selectedToken ? (
         <TouchableOpacity
           onPress={() => (type === 'from' ? setFromToken(null) : setToToken(null))}
-          className="bg-dark-card border-primary rounded-2xl border p-4">
+          className="rounded-2xl border border-primary bg-dark-card p-4">
           <View className="flex-row items-center justify-between">
             <View className="flex-1 flex-row items-center">
-              <View className="bg-primary/20 mr-3 h-12 w-12 items-center justify-center rounded-full">
-                <Text className="text-primary text-sm font-bold">{selectedToken.symbol}</Text>
+              <View className="mr-3 h-12 w-12 items-center justify-center rounded-full bg-primary/20">
+                <Text className="text-sm font-bold text-primary">{selectedToken.symbol}</Text>
               </View>
               <View className="flex-1">
                 <Text className="font-semibold text-white">{selectedToken.symbol}</Text>
-                <Text className="text-dark-gray text-sm">{selectedToken.name}</Text>
-                <Text className="text-dark-gray text-xs">Balance: {selectedToken.balance}</Text>
+                <Text className="text-sm text-dark-gray">{selectedToken.name}</Text>
+                <Text className="text-xs text-dark-gray">Balance: {selectedToken.balance}</Text>
               </View>
             </View>
             <View className="items-end">
@@ -213,18 +264,18 @@ export function IntentBuilder({ intentType, onClose, onCreateIntent }: IntentBui
         </TouchableOpacity>
       ) : (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} className="mb-2">
-          <View className="flex-row space-x-3">
+          <View className="flex-row gap-3">
             {availableTokens.map((token, index) => (
               <Animated.View key={token.symbol} entering={BounceIn.duration(400).delay(index * 50)}>
                 <TouchableOpacity
                   onPress={() => handleTokenSelect(token, type)}
-                  className="bg-dark-card border-dark-border min-w-[100px] rounded-2xl border p-3">
+                  className="min-w-[100px] rounded-2xl border border-dark-border bg-dark-card p-3">
                   <View className="items-center">
-                    <View className="bg-primary/20 mb-2 h-10 w-10 items-center justify-center rounded-full">
-                      <Text className="text-primary text-xs font-bold">{token.symbol}</Text>
+                    <View className="mb-2 h-10 w-10 items-center justify-center rounded-full bg-primary/20">
+                      <Text className="text-xs font-bold text-primary">{token.symbol}</Text>
                     </View>
                     <Text className="text-sm font-medium text-white">{token.symbol}</Text>
-                    <Text className="text-dark-gray text-xs">{token.price}</Text>
+                    <Text className="text-xs text-dark-gray">{token.price}</Text>
                     <View className="mt-1 flex-row items-center">
                       <View
                         className="mr-1 h-1 w-1 rounded-full"
@@ -260,16 +311,16 @@ export function IntentBuilder({ intentType, onClose, onCreateIntent }: IntentBui
   };
 
   return (
-    <SafeAreaView className="bg-dark-bg flex-1">
+    <SafeAreaView className="flex-1 bg-dark-bg">
       {/* Header */}
       <Animated.View
         entering={FadeInUp.duration(600)}
-        className="border-dark-border flex-row items-center justify-between border-b p-4">
+        className="flex-row items-center justify-between border-b border-dark-border p-4">
         <View>
           <Text className="text-xl font-bold text-white">
             Create {intentType.charAt(0).toUpperCase() + intentType.slice(1)} Intent
           </Text>
-          <Text className="text-dark-gray text-sm">Execute with 0.3% protocol fee</Text>
+          <Text className="text-sm text-dark-gray">Execute with 0.3% protocol fee</Text>
         </View>
         <TouchableOpacity onPress={onClose} className="p-2">
           <Ionicons name="close" size={24} color="#8E8E93" />
@@ -290,7 +341,7 @@ export function IntentBuilder({ intentType, onClose, onCreateIntent }: IntentBui
                 setToToken(temp);
                 Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
               }}
-              className="bg-primary/20 rounded-full p-3">
+              className="rounded-full bg-primary/20 p-3">
               <Ionicons name="arrow-down" size={20} color="#FF4500" />
             </TouchableOpacity>
           </Animated.View>
@@ -304,7 +355,7 @@ export function IntentBuilder({ intentType, onClose, onCreateIntent }: IntentBui
           <Text className="mb-3 text-base font-semibold text-white">
             Amount {intentType === 'buy' ? '(USD)' : fromToken ? `(${fromToken.symbol})` : ''}
           </Text>
-          <View className="bg-dark-card border-dark-border rounded-2xl border p-4">
+          <View className="rounded-2xl border border-dark-border bg-dark-card p-4">
             <TextInput
               value={amount}
               onChangeText={setAmount}
@@ -314,7 +365,7 @@ export function IntentBuilder({ intentType, onClose, onCreateIntent }: IntentBui
               keyboardType="numeric"
             />
             {fromToken && (
-              <Text className="text-dark-gray mt-2 text-sm">
+              <Text className="mt-2 text-sm text-dark-gray">
                 Available: {fromToken.balance} {fromToken.symbol}
               </Text>
             )}
@@ -324,16 +375,16 @@ export function IntentBuilder({ intentType, onClose, onCreateIntent }: IntentBui
         {/* Protocol Fee Display */}
         {amount && (
           <Animated.View entering={FadeInUp.duration(400)} className="mb-6">
-            <View className="bg-primary/10 border-primary/30 rounded-2xl border p-4">
+            <View className="rounded-2xl border border-primary/30 bg-primary/10 p-4">
               <View className="mb-2 flex-row items-center justify-between">
-                <Text className="text-primary font-semibold">Protocol Fee (0.3%)</Text>
+                <Text className="font-semibold text-primary">Protocol Fee (0.3%)</Text>
                 <Ionicons name="information-circle" size={16} color="#FF4500" />
               </View>
               <Text className="text-lg font-bold text-white">
                 {calculateProtocolFee(parseFloat(amount) || 0).toFixed(6)}{' '}
                 {fromToken?.symbol || 'tokens'}
               </Text>
-              <Text className="text-dark-gray mt-1 text-sm">
+              <Text className="mt-1 text-sm text-dark-gray">
                 Net amount:{' '}
                 {(
                   (parseFloat(amount) || 0) - calculateProtocolFee(parseFloat(amount) || 0)
@@ -347,7 +398,7 @@ export function IntentBuilder({ intentType, onClose, onCreateIntent }: IntentBui
         {/* Advanced Conditions */}
         <Animated.View entering={SlideInRight.duration(400)} className="mb-6">
           <Text className="mb-3 text-base font-semibold text-white">Conditions</Text>
-          <View className="bg-dark-card border-dark-border rounded-2xl border p-4">
+          <View className="rounded-2xl border border-dark-border bg-dark-card p-4">
             <View className="mb-4 flex-row items-center justify-between">
               <Text className="text-dark-gray">Max Slippage</Text>
               <View className="flex-row items-center">
@@ -370,15 +421,15 @@ export function IntentBuilder({ intentType, onClose, onCreateIntent }: IntentBui
 
         {/* Rugproof Protection */}
         <Animated.View entering={FadeInUp.duration(400)} className="mb-6">
-          <View className="bg-dark-card border-dark-border rounded-2xl border p-4">
+          <View className="rounded-2xl border border-dark-border bg-dark-card p-4">
             <View className="flex-row items-center justify-between">
               <View className="flex-1 flex-row items-center">
-                <View className="bg-success/20 mr-3 h-10 w-10 items-center justify-center rounded-full">
+                <View className="mr-3 h-10 w-10 items-center justify-center rounded-full bg-success/20">
                   <Ionicons name="shield-checkmark" size={20} color="#00D4AA" />
                 </View>
                 <View>
                   <Text className="font-semibold text-white">Rugproof Protection</Text>
-                  <Text className="text-dark-gray text-sm">
+                  <Text className="text-sm text-dark-gray">
                     Automatically scan tokens for safety
                   </Text>
                 </View>
@@ -404,7 +455,7 @@ export function IntentBuilder({ intentType, onClose, onCreateIntent }: IntentBui
             colors={['#1A1A1A', '#2A2A2A']}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 1 }}
-            className="border-dark-border rounded-2xl border p-4">
+            className="rounded-2xl border border-dark-border p-4">
             <View className="mb-2 flex-row items-center justify-between">
               <Text className="text-dark-gray">You will receive approximately</Text>
               <Ionicons name="information-circle-outline" size={16} color="#8E8E93" />
@@ -412,7 +463,7 @@ export function IntentBuilder({ intentType, onClose, onCreateIntent }: IntentBui
             <Text className="text-2xl font-bold text-white">
               {estimatedOutput()} {toToken?.symbol || 'tokens'}
             </Text>
-            <Text className="text-dark-gray mt-1 text-sm">
+            <Text className="mt-1 text-sm text-dark-gray">
               Route via Jupiter Aggregator + 0.3% fee
             </Text>
           </LinearGradient>
@@ -420,7 +471,7 @@ export function IntentBuilder({ intentType, onClose, onCreateIntent }: IntentBui
       </ScrollView>
 
       {/* Create Button */}
-      <View className="border-dark-border border-t p-4">
+      <View className="border-t border-dark-border p-4">
         <AnimatedButton
           title={
             executing

@@ -50,6 +50,11 @@ export function AnimatedButton({
   };
 
   const handlePress = () => {
+    if (disabled || loading) {
+      console.log('⚠️ Button press ignored - button is disabled or loading');
+      return;
+    }
+
     if (hapticFeedback) {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     }
@@ -114,7 +119,7 @@ export function AnimatedButton({
           colors={disabled ? ['#333', '#333'] : ['#1A1A1A', '#2A2A2A']}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
-          className={`${buttonStyles} border-dark-border border`}
+          className={`${buttonStyles} border border-dark-border`}
           style={style}>
           <Text className={textStyles}>{title}</Text>
         </LinearGradient>
@@ -124,7 +129,7 @@ export function AnimatedButton({
     // outline variant
     return (
       <Animated.View
-        className={`${buttonStyles} border-primary border-2 bg-transparent`}
+        className={`${buttonStyles} border-2 border-primary bg-transparent`}
         style={style}>
         <Text className={textStyles}>{title}</Text>
       </Animated.View>

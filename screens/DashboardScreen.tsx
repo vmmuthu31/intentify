@@ -28,12 +28,12 @@ export function DashboardScreen() {
     publicKey,
     refreshBalances,
     connectWallet,
+    activeIntents, // Get activeIntents from SolanaProvider instead of local state
   } = useSolana();
 
   const [showOnboarding, setShowOnboarding] = useState(!connected);
   const [isContractReady, setIsContractReady] = useState(false);
   const [userProfile, setUserProfile] = useState<any>(null);
-  const [activeIntents, setActiveIntents] = useState<any[]>([]);
   const [launchpadState, setLaunchpadState] = useState<any>(null);
   const [protocolStats, setProtocolStats] = useState<any>(null);
 
@@ -72,18 +72,8 @@ export function DashboardScreen() {
       const profile = await intentFiMobile.getUserProfile(publicKey);
       setUserProfile(profile);
 
-      // Format intents for display
-      if (profile?.intents) {
-        const formattedIntents = profile.intents.map((intent: any, index: number) => ({
-          id: index + 1,
-          type: intent.intentType,
-          description: `${intent.intentType} ${(intent.amount / LAMPORTS_PER_SOL).toFixed(2)} SOL`,
-          status: intent.status.toLowerCase(),
-          value: `${(intent.amount / LAMPORTS_PER_SOL).toFixed(2)} SOL`,
-          createdAt: new Date(intent.createdAt * 1000).toLocaleDateString(),
-        }));
-        setActiveIntents(formattedIntents);
-      }
+      // Note: We now use activeIntents from SolanaProvider instead of formatting IntentFI intents
+      // The SolanaProvider manages the real-time intent states
 
       // Fetch launchpad state
       const launchState = await intentFiMobile.advancedSDK.launchpad.getLaunchpadState();
@@ -382,8 +372,15 @@ export function DashboardScreen() {
                           />
                           <Text className="font-semibold text-white">{intent.type} Intent</Text>
                         </View>
-                        <Text className="mb-1 text-sm text-dark-gray">{intent.description}</Text>
-                        <Text className="text-xs text-gray-500">Created: {intent.createdAt}</Text>
+                        <Text className="mb-1 text-sm text-dark-gray">
+                          {intent.params?.amount || 'N/A'}{' '}
+                          {intent.params?.fromMint === 'So11111111111111111111111111111111111111112'
+                            ? 'SOL'
+                            : 'tokens'}
+                        </Text>
+                        <Text className="text-xs text-gray-500">
+                          Created: {new Date(intent.createdAt).toLocaleDateString()}
+                        </Text>
                       </View>
                       <View className="items-end">
                         <Text
@@ -391,7 +388,12 @@ export function DashboardScreen() {
                           style={{ color: getStatusColor(intent.status) }}>
                           {intent.status}
                         </Text>
-                        <Text className="text-sm text-white">{intent.value}</Text>
+                        <Text className="text-sm text-white">
+                          {intent.params?.amount || 'N/A'}{' '}
+                          {intent.params?.fromMint === 'So11111111111111111111111111111111111111112'
+                            ? 'SOL'
+                            : 'tokens'}
+                        </Text>
                       </View>
                     </View>
                   </View>
