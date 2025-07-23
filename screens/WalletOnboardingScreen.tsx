@@ -1,15 +1,13 @@
 import React, { useEffect } from 'react';
-import { View, Text, Alert, Image } from 'react-native';
+import { View, Text, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, {
   FadeInUp,
-  BounceIn,
-  SlideInRight,
+  FadeIn,
   useSharedValue,
   useAnimatedStyle,
-  withSpring,
 } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 
@@ -53,7 +51,7 @@ export function WalletOnboardingScreen({ onComplete }: WalletOnboardingScreenPro
   return (
     <SafeAreaView className="flex-1 bg-dark-bg">
       {/* Header */}
-      <Animated.View entering={FadeInUp.duration(600)} className="items-center p-6 pt-12">
+      <Animated.View entering={FadeInUp.duration(600)} className="z-10 items-center p-6 pt-12">
         <Image source={require('../assets/logo.png')} className="h-12 w-12" resizeMode="contain" />
 
         <Text className="mb-3 mt-6 text-center text-3xl font-bold text-white">
@@ -64,13 +62,13 @@ export function WalletOnboardingScreen({ onComplete }: WalletOnboardingScreenPro
         </Text>
       </Animated.View>
 
-      {/* Features */}
-      <Animated.View entering={SlideInRight.duration(600).delay(200)} className="px-6 py-8">
-        <Text className="mb-6 text-xl font-semibold text-white">What makes IntentFI special?</Text>
+      {/* Features - Changed from SlideInRight to FadeIn for more reliable animation */}
+      <Animated.View entering={FadeIn.duration(800).delay(300)} className="px-6 py-4">
+        <Text className="mb-4 text-xl font-semibold text-white">What makes IntentFI special?</Text>
 
         <View className="space-y-4">
           <Animated.View
-            entering={BounceIn.duration(400).delay(300)}
+            entering={FadeIn.duration(400).delay(400)}
             className="flex-row items-center">
             <View className="mr-4 h-12 w-12 items-center justify-center rounded-full bg-primary/20">
               <Ionicons name="flash" size={24} color="#FF4500" />
@@ -84,7 +82,7 @@ export function WalletOnboardingScreen({ onComplete }: WalletOnboardingScreenPro
           </Animated.View>
 
           <Animated.View
-            entering={BounceIn.duration(400).delay(400)}
+            entering={FadeIn.duration(400).delay(450)}
             className="flex-row items-center">
             <View className="mr-4 h-12 w-12 items-center justify-center rounded-full bg-success/20">
               <Ionicons name="shield-checkmark" size={24} color="#00D4AA" />
@@ -98,7 +96,7 @@ export function WalletOnboardingScreen({ onComplete }: WalletOnboardingScreenPro
           </Animated.View>
 
           <Animated.View
-            entering={BounceIn.duration(400).delay(500)}
+            entering={FadeIn.duration(400).delay(500)}
             className="flex-row items-center">
             <View className="mr-4 h-12 w-12 items-center justify-center rounded-full bg-warning/20">
               <Ionicons name="phone-portrait" size={24} color="#FFB800" />
@@ -112,7 +110,7 @@ export function WalletOnboardingScreen({ onComplete }: WalletOnboardingScreenPro
           </Animated.View>
 
           <Animated.View
-            entering={BounceIn.duration(400).delay(600)}
+            entering={FadeIn.duration(400).delay(550)}
             className="flex-row items-center">
             <View className="mr-4 h-12 w-12 items-center justify-center rounded-full bg-purple-500/20">
               <Ionicons name="rocket" size={24} color="#8B5CF6" />
@@ -128,7 +126,7 @@ export function WalletOnboardingScreen({ onComplete }: WalletOnboardingScreenPro
       </Animated.View>
 
       {/* Network Info */}
-      <Animated.View entering={FadeInUp.duration(600).delay(400)} className="mx-6 mb-6">
+      <Animated.View entering={FadeInUp.duration(600).delay(600)} className="mx-6 mb-6">
         <LinearGradient
           colors={['#1A1A1A', '#2A2A2A']}
           start={{ x: 0, y: 0 }}
@@ -148,7 +146,7 @@ export function WalletOnboardingScreen({ onComplete }: WalletOnboardingScreenPro
       </Animated.View>
 
       {/* Connection Button */}
-      <Animated.View entering={FadeInUp.duration(600).delay(500)} className="px-6 pb-8">
+      <Animated.View entering={FadeInUp.duration(600).delay(650)} className="px-6 pb-8">
         <Animated.View style={animatedStyle}>
           <AnimatedButton
             title={connecting || phantomConnecting ? 'Connecting...' : 'Connect Phantom Wallet'}
