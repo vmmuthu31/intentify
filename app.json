@@ -3,22 +3,16 @@
     "name": "IntentFI",
     "slug": "intentfi-mobile",
     "version": "1.0.0",
-
     "web": {
       "favicon": "./assets/favicon.png"
     },
-
     "experiments": {
       "tsconfigPaths": true
     },
-
     "plugins": [],
-
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-
     "userInterfaceStyle": "dark",
-
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
@@ -33,6 +27,7 @@
       }
     },
     "android": {
+      "package": "com.intentify.app",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#FF4500"
@@ -47,6 +42,11 @@
           ]
         }
       ]
+    },
+    "extra": {
+      "eas": {
+        "projectId": "b8680900-3871-472e-b978-89e98c9d0e71"
+      }
     }
   }
 }
