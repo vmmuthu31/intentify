@@ -12,6 +12,18 @@ import {
 } from '@solana/spl-token';
 import { BN } from '@coral-xyz/anchor';
 import { networkService } from './config';
+import * as Crypto from 'expo-crypto';
+
+// Calculate the Anchor instruction discriminator based on method name
+async function deriveDiscriminator(name: string): Promise<Buffer> {
+  // Using expo-crypto which has a different API than Node's crypto
+  const data = await Crypto.digestStringAsync(
+    Crypto.CryptoDigestAlgorithm.SHA256,
+    `global:${name}`,
+    { encoding: Crypto.CryptoEncoding.HEX }
+  );
+  return Buffer.from(data, 'hex').slice(0, 8);
+}
 
 export interface SwapIntentParams {
   fromMint: PublicKey;
@@ -103,6 +115,10 @@ export class IntentFiService {
   ): Promise<Transaction> {
     const [protocolState] = await this.getProtocolStatePDA();
 
+    // Get the proper Anchor instruction discriminator for initialize_protocol
+    const discriminator = await deriveDiscriminator('initialize_protocol');
+    console.log('🔍 InitializeProtocol discriminator:', discriminator.toString('hex'));
+
     const instruction = new TransactionInstruction({
       programId: networkService.getIntentFiProgramId(),
       keys: [
@@ -110,9 +126,9 @@ export class IntentFiService {
         { pubkey: protocolState, isSigner: false, isWritable: true },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       ],
-      data: Buffer.from([
-        0, // initialize_protocol instruction index
-        ...treasuryAuthority.toBuffer(),
+      data: Buffer.concat([
+        discriminator, // 8-byte Anchor discriminator
+        treasuryAuthority.toBuffer(),
       ]),
     });
 
@@ -128,6 +144,10 @@ export class IntentFiService {
     const publicKey = authority instanceof Keypair ? authority.publicKey : authority;
     const [userAccount] = await this.getUserAccountPDA(publicKey);
 
+    // Get the proper Anchor instruction discriminator for initialize_user
+    const discriminator = await deriveDiscriminator('initialize_user');
+    console.log('🔍 InitializeUser discriminator:', discriminator.toString('hex'));
+
     const instruction = new TransactionInstruction({
       programId: networkService.getIntentFiProgramId(),
       keys: [
@@ -135,7 +155,7 @@ export class IntentFiService {
         { pubkey: userAccount, isSigner: false, isWritable: true },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       ],
-      data: Buffer.from([1]), // initialize_user instruction index
+      data: discriminator, // Use 8-byte Anchor discriminator instead of single byte
     });
 
     const transaction = new Transaction().add(instruction);
@@ -161,6 +181,10 @@ export class IntentFiService {
 
     const [intentAccount] = await this.getIntentAccountPDA(publicKey, intentNumber);
 
+    // Get the proper Anchor instruction discriminator for create_swap_intent
+    const discriminator = await deriveDiscriminator('create_swap_intent');
+    console.log('🔍 CreateSwapIntent discriminator:', discriminator.toString('hex'));
+
     const instruction = new TransactionInstruction({
       programId: networkService.getIntentFiProgramId(),
       keys: [
@@ -171,7 +195,7 @@ export class IntentFiService {
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       ],
       data: Buffer.concat([
-        Buffer.from([2]), // create_swap_intent instruction index
+        discriminator, // 8-byte Anchor discriminator
         params.fromMint.toBuffer(),
         params.toMint.toBuffer(),
         new BN(params.amount).toArrayLike(Buffer, 'le', 8),
@@ -202,6 +226,10 @@ export class IntentFiService {
 
     const [intentAccount] = await this.getIntentAccountPDA(publicKey, intentNumber);
 
+    // Get the proper Anchor instruction discriminator for create_lend_intent
+    const discriminator = await deriveDiscriminator('create_lend_intent');
+    console.log('🔍 CreateLendIntent discriminator:', discriminator.toString('hex'));
+
     const instruction = new TransactionInstruction({
       programId: networkService.getIntentFiProgramId(),
       keys: [
@@ -212,7 +240,7 @@ export class IntentFiService {
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       ],
       data: Buffer.concat([
-        Buffer.from([3]), // create_lend_intent instruction index
+        discriminator, // 8-byte Anchor discriminator
         params.mint.toBuffer(),
         new BN(params.amount).toArrayLike(Buffer, 'le', 8),
         new BN(params.minApy).toArrayLike(Buffer, 'le', 2),
@@ -237,6 +265,10 @@ export class IntentFiService {
     const [protocolState] = await this.getProtocolStatePDA();
     const [userAccountPDA] = await this.getUserAccountPDA(user.publicKey);
 
+    // Get the proper Anchor instruction discriminator for execute_swap_intent
+    const discriminator = await deriveDiscriminator('execute_swap_intent');
+    console.log('🔍 ExecuteSwapIntent discriminator:', discriminator.toString('hex'));
+
     const instruction = new TransactionInstruction({
       programId: networkService.getIntentFiProgramId(),
       keys: [
@@ -250,7 +282,7 @@ export class IntentFiService {
         { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
       ],
       data: Buffer.concat([
-        Buffer.from([4]), // execute_swap_intent instruction index
+        discriminator, // 8-byte Anchor discriminator
         new BN(expectedOutput).toArrayLike(Buffer, 'le', 8),
       ]),
     });
@@ -265,6 +297,10 @@ export class IntentFiService {
   public async cancelIntent(authority: Keypair, intentAccount: PublicKey): Promise<Transaction> {
     const [userAccount] = await this.getUserAccountPDA(authority.publicKey);
 
+    // Get the proper Anchor instruction discriminator for cancel_intent
+    const discriminator = await deriveDiscriminator('cancel_intent');
+    console.log('🔍 CancelIntent discriminator:', discriminator.toString('hex'));
+
     const instruction = new TransactionInstruction({
       programId: networkService.getIntentFiProgramId(),
       keys: [
@@ -272,7 +308,7 @@ export class IntentFiService {
         { pubkey: intentAccount, isSigner: false, isWritable: true },
         { pubkey: userAccount, isSigner: false, isWritable: true },
       ],
-      data: Buffer.from([5]), // cancel_intent instruction index
+      data: discriminator, // 8-byte Anchor discriminator
     });
 
     const transaction = new Transaction().add(instruction);

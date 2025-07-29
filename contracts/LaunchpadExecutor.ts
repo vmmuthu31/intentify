@@ -202,6 +202,7 @@ export class LaunchpadExecutor {
       offset += 8;
       launchParamsData.writeBigUInt64LE(BigInt(params.tokenPrice), offset);
       offset += 8;
+      // tokens_for_sale (store raw value - contract will handle decimal scaling in calculations)
       launchParamsData.writeBigUInt64LE(BigInt(params.tokensForSale), offset);
       offset += 8;
       launchParamsData.writeBigUInt64LE(BigInt(params.minContribution), offset);
@@ -426,7 +427,7 @@ export class LaunchpadExecutor {
       launchParamsData.writeBigUInt64LE(BigInt(params.tokenPrice), launchOffset);
       launchOffset += 8;
       
-      // tokens_for_sale
+      // tokens_for_sale (store raw value - contract will handle decimal scaling in calculations)
       launchParamsData.writeBigUInt64LE(BigInt(params.tokensForSale), launchOffset);
       launchOffset += 8;
       
@@ -598,7 +599,7 @@ export class LaunchpadExecutor {
         // Get the launch data to find the token mint
         const launchAccountInfo = await this.connection.getAccountInfo(launchStatePDA);
         if (launchAccountInfo) {
-          const launchData = this.deserializeLaunchData(launchAccountInfo.data);
+          const launchData = await this.deserializeLaunchData(launchAccountInfo.data);
           if (launchData) {
             tokenMint = launchData.tokenMint;
             console.log('📝 Verified token mint from launch data:', tokenMint.toString());
@@ -798,7 +799,7 @@ export class LaunchpadExecutor {
       for (const account of accounts) {
         try {
           // Try to deserialize each account as launch data
-          const launchData = this.deserializeLaunchData(account.account.data);
+          const launchData = await this.deserializeLaunchData(account.account.data);
           if (launchData) {
             // Only include active launches
             if (launchData.status === 'Active') {
@@ -1161,7 +1162,7 @@ export class LaunchpadExecutor {
   /**
    * Deserialize launch data from account
    */
-  private deserializeLaunchData(data: Buffer): LaunchData | null {
+  private async deserializeLaunchData(data: Buffer): Promise<LaunchData | null> {
     try {
       // This deserializes the Anchor account data format
       // First 8 bytes are the account discriminator
@@ -1317,6 +1318,10 @@ export class LaunchpadExecutor {
       // const bump = data[offset]; 
       offset += 1;
 
+      // Get token mint info for display purposes but use tokensForSale as-is since contract expects raw values
+      // The contract handles decimal scaling in its calculations, so we store raw token amounts
+      const humanReadableTokensForSale = tokensForSale; // Use raw value - do not apply decimals
+
       // Construct LaunchData object
       const launchData = {
         creator,
@@ -1327,7 +1332,7 @@ export class LaunchpadExecutor {
         softCap,
         hardCap,
         tokenPrice,
-        tokensForSale,
+        tokensForSale: humanReadableTokensForSale,
         minContribution,
         maxContribution,
         launchStart,
