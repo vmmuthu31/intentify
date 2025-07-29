@@ -97,10 +97,7 @@ export function DashboardScreen() {
       return total + token.uiAmount * (token.price || 0);
     }, 0);
 
-    // Add SOL balance value (estimated at $189 per SOL for demo)
-    const solValue = balance * 189;
-
-    return tokenValue + solValue;
+    return tokenValue;
   };
 
   const quickActions = [
@@ -176,7 +173,7 @@ export function DashboardScreen() {
 
   const portfolioValue = getTotalPortfolioValue();
   const portfolioChange = protocolStats
-    ? `${(protocolStats.totalVolume / LAMPORTS_PER_SOL).toFixed(2)} SOL`
+    ? `${(protocolStats.totalRaised / LAMPORTS_PER_SOL).toFixed(2)} SOL`
     : '$0.00';
   const portfolioChangePercent =
     activeIntents.length > 0 ? `+${activeIntents.length * 2.1}%` : '0%';

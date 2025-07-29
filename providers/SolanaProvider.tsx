@@ -8,7 +8,8 @@ import {
 } from '@solana/web3.js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
-
+import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
+import { TokenListProvider, TokenInfo } from '@solana/spl-token-registry';
 import { usePhantomWallet } from './PhantomProvider';
 
 import {
@@ -113,8 +114,22 @@ export function SolanaProvider({ children }: SolanaProviderProps) {
     dappKeyPair,
   } = usePhantomWallet();
 
+  const tokenMap: Record<string, TokenInfo> = {};
+
+  const loadTokenList = async () => {
+    const provider = new TokenListProvider();
+    const tokenListContainer = await provider.resolve();
+    const tokenList = tokenListContainer.filterByClusterSlug('mainnet-beta').getList();
+
+    tokenList.forEach((token) => {
+      tokenMap[token.address] = token;
+    });
+
+    return tokenMap;
+  };
   // Check for existing connection on app start
   useEffect(() => {
+    loadTokenList();
     checkExistingConnection();
   }, []);
 
@@ -282,52 +297,81 @@ export function SolanaProvider({ children }: SolanaProviderProps) {
     }
   };
 
+  const fetchTokenPrices = async (mints: string[]) => {
+    try {
+      const endpoint = `https://public-api.birdeye.so/public/multi_price?list=${mints.join(',')}`;
+      const response = await fetch(endpoint, {
+        headers: {
+          'X-API-KEY': 'birdeye-public-api-key',
+        },
+      });
+
+      const data = await response.json();
+      console.log('🔍 Token prices:', data);
+
+      return data.data; // { [mint]: { value: price } }
+    } catch (error) {
+      console.error('❌ Failed to fetch prices:', error);
+      return {};
+    }
+  };
+
   const refreshBalances = async () => {
     if (!publicKey) return;
 
     try {
       console.log('🔄 Refreshing balances...');
 
-      // Get SOL balance
       const solBalance = await connection.getBalance(publicKey);
       setBalance(solBalance / LAMPORTS_PER_SOL);
 
       const balances: TokenBalance[] = [];
 
-      // Add SOL as base token
+      const tokenAccounts = await connection.getParsedTokenAccountsByOwner(publicKey, {
+        programId: TOKEN_PROGRAM_ID,
+      });
+
+      const mintList = tokenAccounts.value.map(({ account }) => account.data.parsed.info.mint);
+      const isDevnet = connection.rpcEndpoint.includes('devnet');
+      const prices = isDevnet
+        ? {}
+        : await fetchTokenPrices([...mintList, 'So11111111111111111111111111111111111111112']);
+
       balances.push({
         mint: 'So11111111111111111111111111111111111111112',
         symbol: 'SOL',
         balance: solBalance,
         uiAmount: solBalance / LAMPORTS_PER_SOL,
         decimals: 9,
-        price: 189.5,
+        price: prices?.['So11111111111111111111111111111111111111112']?.value ?? 0,
       });
 
-      // Add demo token balances for testing
-      const demoTokens = [
-        { symbol: 'USDC', balance: 2150000000, decimals: 6, price: 1.0 },
-        { symbol: 'BONK', balance: 1250000000000, decimals: 5, price: 0.0009 },
-        { symbol: 'mSOL', balance: 8700000000, decimals: 9, price: 189.91 },
-        { symbol: 'RAY', balance: 125500000000, decimals: 6, price: 2.34 },
-        { symbol: 'ORCA', balance: 67800000000, decimals: 6, price: 3.45 },
-      ];
+      tokenAccounts.value.forEach(({ account }) => {
+        const data = account.data.parsed.info;
+        const mint = data.mint;
+        const rawAmount = parseInt(data.tokenAmount.amount);
+        const decimals = data.tokenAmount.decimals;
 
-      demoTokens.forEach((token) => {
+        if (rawAmount === 0) return;
+
+        const uiAmount = rawAmount / Math.pow(10, decimals);
+        const symbol = tokenMap[mint]?.symbol || 'UNKNOWN';
+        const price = prices?.[mint]?.value ?? 0;
+
         balances.push({
-          mint: `demo_${token.symbol}`,
-          symbol: token.symbol,
-          balance: token.balance,
-          uiAmount: token.balance / Math.pow(10, token.decimals),
-          decimals: token.decimals,
-          price: token.price,
+          mint,
+          symbol,
+          balance: rawAmount,
+          uiAmount,
+          decimals,
+          price,
         });
       });
 
       setTokenBalances(balances);
       console.log('✅ Balances refreshed');
     } catch (error) {
-      console.error('Failed to refresh balances:', error);
+      console.error('❌ Failed to refresh balances:', error);
     }
   };
 

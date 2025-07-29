@@ -484,7 +484,7 @@ export function IntentScreen() {
     setTimeout(() => {
       setShowIntentBuilder(true);
       console.log('🎯 Modal should now be visible');
-    }, 50);
+    }, 100);
   };
 
   const handleCreateIntent = async (intentData: IntentBuilderData) => {

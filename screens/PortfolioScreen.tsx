@@ -65,11 +65,9 @@ export function PortfolioScreen() {
         return total + token.uiAmount * (token.price || 0);
       }, 0);
 
-      const solValue = balance * 189; // Estimated SOL price
-
       setPortfolioStats({
-        totalValue: totalTokenValue + solValue,
-        solValue: solValue,
+        totalValue: totalTokenValue,
+        solValue: balance,
         tokenValue: totalTokenValue,
         intentVolume: profile?.account?.totalVolume || 0,
         activeIntents: profile?.account?.activeIntents || 0,

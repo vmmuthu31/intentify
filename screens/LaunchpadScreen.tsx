@@ -35,13 +35,11 @@ export function LaunchpadScreen() {
     activeLaunches: realActiveLaunches,
     refreshLaunches,
   } = useSolana();
-  const { isLoggedIn: phantomConnected } = usePhantomWallet();
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [isInitialized, setIsInitialized] = useState(false);
   const [loading, setLoading] = useState(false);
   const [userKeypair, setUserKeypair] = useState<Keypair | null>(null);
   const [launchpadState, setLaunchpadState] = useState<any>(null);
-  const [activeLaunches, setActiveLaunches] = useState<LaunchData[]>([]);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showContributeModal, setShowContributeModal] = useState(false);
   const [selectedLaunch, setSelectedLaunch] = useState<LaunchData | null>(null);
