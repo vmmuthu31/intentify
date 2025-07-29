@@ -45,19 +45,19 @@ export function LaunchpadScreen() {
   const [showContributeModal, setShowContributeModal] = useState(false);
   const [selectedLaunch, setSelectedLaunch] = useState<LaunchData | null>(null);
 
-  // Create launch form
+  // Create launch form - simplified to only require name and symbol
   const [launchForm, setLaunchForm] = useState({
     tokenName: '',
     tokenSymbol: '',
     tokenUri: '',
-    decimals: 9,
-    softCap: '',
-    hardCap: '',
-    tokenPrice: '',
-    tokensForSale: '',
-    minContribution: '',
-    maxContribution: '',
-    launchDuration: '7', // days
+    decimals: 9, // Standardized: 9 decimals
+    softCap: '10', // Standardized: 10 SOL
+    hardCap: '100', // Standardized: 100 SOL
+    tokenPrice: '0.00001', // Standardized: 0.00001 SOL per token
+    tokensForSale: '100000000000', // Standardized: 100B tokens
+    minContribution: '0.00000001', // Standardized: 0.00000001 SOL minimum
+    maxContribution: '10', // Standardized: 10 SOL maximum
+    launchDuration: '7', // Standardized: 7 days
   });
 
   // Contribute form
@@ -164,14 +164,9 @@ export function LaunchpadScreen() {
       return;
     }
 
-    // Validate form
-    if (
-      !launchForm.tokenName ||
-      !launchForm.tokenSymbol ||
-      !launchForm.softCap ||
-      !launchForm.hardCap
-    ) {
-      Alert.alert('Error', 'Please fill in all required fields');
+    // Validate form - only require name and symbol
+    if (!launchForm.tokenName || !launchForm.tokenSymbol) {
+      Alert.alert('Error', 'Please enter both token name and symbol');
       return;
     }
 
@@ -332,12 +327,12 @@ export function LaunchpadScreen() {
       tokenSymbol: '',
       tokenUri: '',
       decimals: 9,
-      softCap: '',
-      hardCap: '',
-      tokenPrice: '',
-      tokensForSale: '',
-      minContribution: '',
-      maxContribution: '',
+      softCap: '10', // Reset to standardized values
+      hardCap: '100',
+      tokenPrice: '0.001',
+      tokensForSale: '100000000',
+      minContribution: '0.01',
+      maxContribution: '10',
       launchDuration: '7',
     });
   };
@@ -601,6 +596,8 @@ export function LaunchpadScreen() {
 
           <ScrollView className="flex-1 p-4">
             <View className="space-y-4">
+              {/* Standardized Parameters Info */}
+
               <View>
                 <Text className="mb-2 font-semibold text-white">Token Name *</Text>
                 <TextInput
@@ -625,79 +622,6 @@ export function LaunchpadScreen() {
                 />
               </View>
 
-              <View>
-                <Text className="mb-2 font-semibold text-white">Soft Cap (SOL) *</Text>
-                <TextInput
-                  className="rounded-lg border border-dark-border bg-dark-card p-3 text-white"
-                  placeholder="e.g., 10"
-                  placeholderTextColor="#8E8E93"
-                  keyboardType="numeric"
-                  value={launchForm.softCap}
-                  onChangeText={(text) => setLaunchForm({ ...launchForm, softCap: text })}
-                />
-              </View>
-
-              <View>
-                <Text className="mb-2 font-semibold text-white">Hard Cap (SOL) *</Text>
-                <TextInput
-                  className="rounded-lg border border-dark-border bg-dark-card p-3 text-white"
-                  placeholder="e.g., 100"
-                  placeholderTextColor="#8E8E93"
-                  keyboardType="numeric"
-                  value={launchForm.hardCap}
-                  onChangeText={(text) => setLaunchForm({ ...launchForm, hardCap: text })}
-                />
-              </View>
-
-              <View>
-                <Text className="mb-2 font-semibold text-white">Token Price (SOL) *</Text>
-                <TextInput
-                  className="rounded-lg border border-dark-border bg-dark-card p-3 text-white"
-                  placeholder="e.g., 0.01"
-                  placeholderTextColor="#8E8E93"
-                  keyboardType="numeric"
-                  value={launchForm.tokenPrice}
-                  onChangeText={(text) => setLaunchForm({ ...launchForm, tokenPrice: text })}
-                />
-              </View>
-
-              <View>
-                <Text className="mb-2 font-semibold text-white">Tokens for Sale *</Text>
-                <TextInput
-                  className="rounded-lg border border-dark-border bg-dark-card p-3 text-white"
-                  placeholder="e.g., 1000000"
-                  placeholderTextColor="#8E8E93"
-                  keyboardType="numeric"
-                  value={launchForm.tokensForSale}
-                  onChangeText={(text) => setLaunchForm({ ...launchForm, tokensForSale: text })}
-                />
-              </View>
-
-              <View className="flex-row space-x-4">
-                <View className="flex-1">
-                  <Text className="mb-2 font-semibold text-white">Min Contribution (SOL)</Text>
-                  <TextInput
-                    className="rounded-lg border border-dark-border bg-dark-card p-3 text-white"
-                    placeholder="0.1"
-                    placeholderTextColor="#8E8E93"
-                    keyboardType="numeric"
-                    value={launchForm.minContribution}
-                    onChangeText={(text) => setLaunchForm({ ...launchForm, minContribution: text })}
-                  />
-                </View>
-                <View className="flex-1">
-                  <Text className="mb-2 font-semibold text-white">Max Contribution (SOL)</Text>
-                  <TextInput
-                    className="rounded-lg border border-dark-border bg-dark-card p-3 text-white"
-                    placeholder="10"
-                    placeholderTextColor="#8E8E93"
-                    keyboardType="numeric"
-                    value={launchForm.maxContribution}
-                    onChangeText={(text) => setLaunchForm({ ...launchForm, maxContribution: text })}
-                  />
-                </View>
-              </View>
-
               <TouchableOpacity
                 onPress={createTokenLaunch}
                 disabled={loading}
@@ -708,6 +632,20 @@ export function LaunchpadScreen() {
                   <Text className="text-center text-lg font-bold text-white">Create Launch</Text>
                 )}
               </TouchableOpacity>
+            </View>
+            <View className="mt-5 rounded-lg border border-blue-500/30 bg-blue-500/10 p-4">
+              <Text className="mb-2 font-semibold text-blue-400">
+                📋 Standardized Launch Parameters
+              </Text>
+              <View className="space-y-1">
+                <Text className="text-sm text-gray-300">• Soft Cap: 10 SOL</Text>
+                <Text className="text-sm text-gray-300">• Hard Cap: 100 SOL</Text>
+                <Text className="text-sm text-gray-300">• Token Price: 0.00001 SOL per token</Text>
+                <Text className="text-sm text-gray-300">• Tokens for Sale: 100B tokens</Text>
+                <Text className="text-sm text-gray-300">• Min Contribution: 0.00000001 SOL</Text>
+                <Text className="text-sm text-gray-300">• Max Contribution: 10 SOL</Text>
+                <Text className="text-sm text-gray-300">• Launch Duration: 7 days</Text>
+              </View>
             </View>
           </ScrollView>
         </SafeAreaView>
