@@ -23,6 +23,7 @@
     "@solana-mobile/mobile-wallet-adapter-protocol": "^2.2.2",
     "@solana-mobile/mobile-wallet-adapter-protocol-web3js": "^2.2.2",
     "@solana/spl-token": "^0.4.13",
+    "@solana/spl-token-registry": "^0.2.4574",
     "@solana/wallet-adapter-base": "^0.9.27",
     "@solana/wallet-adapter-react": "^0.15.39",
     "@solana/wallet-adapter-react-ui": "^0.9.39",

@@ -72,83 +72,85 @@ export default function App() {
   }
 
   return (
-    <SafeAreaProvider>
-      <PhantomProvider>
-        <SolanaProvider>
-          <StatusBar style="light" />
+    <GestureHandlerRootView>
+      <SafeAreaProvider>
+        <PhantomProvider>
+          <SolanaProvider>
+            <StatusBar style="light" />
 
-          {!isOnboardingComplete ? (
-            <Modal visible={true} animationType="slide" presentationStyle="fullScreen">
-              <WalletOnboardingScreen onComplete={handleOnboardingComplete} />
-            </Modal>
-          ) : (
-            <NavigationContainer>
-              <Tab.Navigator
-                screenOptions={{
-                  tabBarActiveTintColor: '#FF4500',
-                  tabBarInactiveTintColor: '#8E8E93',
-                  tabBarStyle: {
-                    backgroundColor: '#1C1C1E',
-                    borderTopColor: '#2C2C2E',
-                    height: 60,
-                    paddingBottom: 10,
-                  },
-                  tabBarShowLabel: true,
-                  tabBarLabelStyle: {
-                    fontSize: 12,
-                  },
-                  headerShown: false,
-                }}>
-                <Tab.Screen
-                  name="Dashboard"
-                  component={DashboardScreen}
-                  options={{
-                    tabBarIcon: ({ color, size }) => (
-                      <Ionicons name="home" color={color} size={size} />
-                    ),
-                  }}
-                />
-                <Tab.Screen
-                  name="Intent"
-                  component={IntentScreen}
-                  options={{
-                    tabBarIcon: ({ color, size }) => (
-                      <Ionicons name="flash" color={color} size={size} />
-                    ),
-                  }}
-                />
-                <Tab.Screen
-                  name="Launchpad"
-                  component={LaunchpadScreen}
-                  options={{
-                    tabBarIcon: ({ color, size }) => (
-                      <Ionicons name="rocket" color={color} size={size} />
-                    ),
-                  }}
-                />
-                <Tab.Screen
-                  name="Portfolio"
-                  component={PortfolioScreen}
-                  options={{
-                    tabBarIcon: ({ color, size }) => (
-                      <Ionicons name="wallet" color={color} size={size} />
-                    ),
-                  }}
-                />
-                <Tab.Screen
-                  name="Settings"
-                  component={SettingsScreen}
-                  options={{
-                    tabBarIcon: ({ color, size }) => (
-                      <Ionicons name="settings" color={color} size={size} />
-                    ),
-                  }}
-                />
-              </Tab.Navigator>
-            </NavigationContainer>
-          )}
-        </SolanaProvider>
-      </PhantomProvider>
-    </SafeAreaProvider>
+            {!isOnboardingComplete ? (
+              <Modal visible={true} animationType="slide" presentationStyle="fullScreen">
+                <WalletOnboardingScreen onComplete={handleOnboardingComplete} />
+              </Modal>
+            ) : (
+              <NavigationContainer>
+                <Tab.Navigator
+                  screenOptions={{
+                    tabBarActiveTintColor: '#FF4500',
+                    tabBarInactiveTintColor: '#8E8E93',
+                    tabBarStyle: {
+                      backgroundColor: '#1C1C1E',
+                      borderTopColor: '#2C2C2E',
+                      height: 60,
+                      paddingBottom: 10,
+                    },
+                    tabBarShowLabel: true,
+                    tabBarLabelStyle: {
+                      fontSize: 12,
+                    },
+                    headerShown: false,
+                  }}>
+                  <Tab.Screen
+                    name="Dashboard"
+                    component={DashboardScreen}
+                    options={{
+                      tabBarIcon: ({ color, size }) => (
+                        <Ionicons name="home" color={color} size={size} />
+                      ),
+                    }}
+                  />
+                  <Tab.Screen
+                    name="Intent"
+                    component={IntentScreen}
+                    options={{
+                      tabBarIcon: ({ color, size }) => (
+                        <Ionicons name="flash" color={color} size={size} />
+                      ),
+                    }}
+                  />
+                  <Tab.Screen
+                    name="Launchpad"
+                    component={LaunchpadScreen}
+                    options={{
+                      tabBarIcon: ({ color, size }) => (
+                        <Ionicons name="rocket" color={color} size={size} />
+                      ),
+                    }}
+                  />
+                  <Tab.Screen
+                    name="Portfolio"
+                    component={PortfolioScreen}
+                    options={{
+                      tabBarIcon: ({ color, size }) => (
+                        <Ionicons name="wallet" color={color} size={size} />
+                      ),
+                    }}
+                  />
+                  <Tab.Screen
+                    name="Settings"
+                    component={SettingsScreen}
+                    options={{
+                      tabBarIcon: ({ color, size }) => (
+                        <Ionicons name="settings" color={color} size={size} />
+                      ),
+                    }}
+                  />
+                </Tab.Navigator>
+              </NavigationContainer>
+            )}
+          </SolanaProvider>
+        </PhantomProvider>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
