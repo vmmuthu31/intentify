@@ -6,7 +6,6 @@ import {
   PublicKey,
   Transaction,
   SystemProgram,
-  LAMPORTS_PER_SOL,
   TransactionInstruction,
   Keypair,
   ComputeBudgetProgram,
@@ -20,8 +19,11 @@ import {
   MINT_SIZE,
   getMinimumBalanceForRentExemptMint,
 } from '@solana/spl-token';
-// Note: In a production app, you would use proper Metaplex libraries
-// For this demo, we'll create simplified metadata handling
+// Use official Metaplex SDK for metadata handling
+import {
+  getCreateMetadataAccountV3InstructionDataSerializer,
+  MPL_TOKEN_METADATA_PROGRAM_ID,
+} from '@metaplex-foundation/mpl-token-metadata';
 import { Buffer } from 'buffer';
 import { PhantomWalletInterface } from './IntentExecutor';
 
@@ -307,32 +309,26 @@ export class LaunchpadExecutor {
         )
       );
 
-      const METADATA_PROGRAM_ID = new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
-      
+      // Step 2.5: Create Metaplex metadata for the token
       const [metadataPDA] = PublicKey.findProgramAddressSync(
         [
           Buffer.from('metadata'),
-          METADATA_PROGRAM_ID.toBuffer(),
+          new PublicKey(MPL_TOKEN_METADATA_PROGRAM_ID).toBuffer(),
           mintPubkey.toBuffer(),
         ],
-        METADATA_PROGRAM_ID
+        new PublicKey(MPL_TOKEN_METADATA_PROGRAM_ID)
       );
 
       console.log('📝 Metadata PDA:', metadataPDA.toString());
 
-      const metadataInstruction = new TransactionInstruction({
-        keys: [
-          { pubkey: metadataPDA, isSigner: false, isWritable: true }, 
-          { pubkey: mintPubkey, isSigner: false, isWritable: false },
-          { pubkey: this.userPublicKey, isSigner: true, isWritable: false }, // mint authority
-          { pubkey: this.userPublicKey, isSigner: true, isWritable: true }, // payer
-          { pubkey: this.userPublicKey, isSigner: false, isWritable: false }, // update authority
-          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // system program
-          { pubkey: new PublicKey('SysvarRent111111111111111111111111111111111'), isSigner: false, isWritable: false }, // rent
-        ],
-        programId: METADATA_PROGRAM_ID,
-        data: this.createMetadataInstructionData(params.tokenName, params.tokenSymbol, params.tokenUri)
-      });
+      // Create metadata instruction with official Metaplex SDK
+      const metadataInstruction = this.createMetadataInstruction(
+        metadataPDA,
+        mintPubkey,
+        params.tokenName,
+        params.tokenSymbol,
+        params.tokenUri
+      );
 
       transaction.add(metadataInstruction);
       console.log('✅ Added metadata creation instruction');
@@ -1063,70 +1059,51 @@ export class LaunchpadExecutor {
   }
 
   /**
-   * Create Metaplex metadata instruction data for CreateMetadataAccountV3
+   * Create Metaplex metadata instruction using official SDK
    */
-  private createMetadataInstructionData(name: string, symbol: string, uri: string): Buffer {
-    // Instruction discriminator for CreateMetadataAccountV3 (first 8 bytes)
-    const discriminator = Buffer.from([51, 57, 225, 47, 182, 146, 137, 166]);
+  private createMetadataInstruction(
+    metadataPDA: PublicKey,
+    mintPubkey: PublicKey,
+    tokenName: string,
+    tokenSymbol: string,
+    tokenUri: string
+  ): TransactionInstruction {
+    console.log('🏗️ Creating metadata instruction using official Metaplex SDK');
     
-    // Serialize the DataV2 struct
-    const nameBuffer = Buffer.from(name, 'utf8');
-    const symbolBuffer = Buffer.from(symbol, 'utf8');
-    const uriBuffer = Buffer.from(uri, 'utf8');
-    
-    // Create the data buffer
-    const data = Buffer.alloc(4 + nameBuffer.length + 4 + symbolBuffer.length + 4 + uriBuffer.length + 50); // extra space for other fields
-    let offset = 0;
-    
-    // DataV2 fields
-    // name (String)
-    data.writeUInt32LE(nameBuffer.length, offset);
-    offset += 4;
-    nameBuffer.copy(data, offset);
-    offset += nameBuffer.length;
-    
-    // symbol (String) 
-    data.writeUInt32LE(symbolBuffer.length, offset);
-    offset += 4;
-    symbolBuffer.copy(data, offset);
-    offset += symbolBuffer.length;
-    
-    // uri (String)
-    data.writeUInt32LE(uriBuffer.length, offset);
-    offset += 4;
-    uriBuffer.copy(data, offset);
-    offset += uriBuffer.length;
-    
-    // seller_fee_basis_points (u16)
-    data.writeUInt16LE(0, offset);
-    offset += 2;
-    
-    // creators (Option<Vec<Creator>>) - None
-    data.writeUInt8(0, offset); // None
-    offset += 1;
-    
-    // collection (Option<Collection>) - None
-    data.writeUInt8(0, offset); // None
-    offset += 1;
-    
-    // uses (Option<Uses>) - None
-    data.writeUInt8(0, offset); // None
-    offset += 1;
-    
-    // Additional parameters for CreateMetadataAccountV3
-    // is_mutable (bool)
-    data.writeUInt8(1, offset); // true
-    offset += 1;
-    
-    // update_authority_is_signer (bool)
-    data.writeUInt8(1, offset); // true
-    offset += 1;
-    
-    // collection_details (Option<CollectionDetails>) - None
-    data.writeUInt8(0, offset); // None
-    offset += 1;
-    
-    return Buffer.concat([discriminator, data.slice(0, offset)]);
+    // Create DataV2 object for the metadata
+    const metadataData = {
+      name: tokenName,
+      symbol: tokenSymbol,
+      uri: tokenUri,
+      sellerFeeBasisPoints: 0,
+      creators: null,
+      collection: null,
+      uses: null,
+    };
+
+    // Use the official Metaplex serializer to create the instruction data
+    const serializer = getCreateMetadataAccountV3InstructionDataSerializer();
+    const instructionData = serializer.serialize({
+      data: metadataData,
+      isMutable: true,
+      collectionDetails: null,
+    });
+
+    console.log('✅ Serialized metadata instruction data:', instructionData.length, 'bytes');
+
+    return new TransactionInstruction({
+      keys: [
+        { pubkey: metadataPDA, isSigner: false, isWritable: true }, // metadata account
+        { pubkey: mintPubkey, isSigner: false, isWritable: false }, // mint
+        { pubkey: this.userPublicKey, isSigner: true, isWritable: false }, // mint authority
+        { pubkey: this.userPublicKey, isSigner: true, isWritable: true }, // payer
+        { pubkey: this.userPublicKey, isSigner: false, isWritable: false }, // update authority
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // system program
+        { pubkey: new PublicKey('SysvarRent111111111111111111111111111111111'), isSigner: false, isWritable: false }, // rent sysvar
+      ],
+      programId: new PublicKey(MPL_TOKEN_METADATA_PROGRAM_ID),
+      data: Buffer.from(instructionData),
+    });
   }
 
   /**
