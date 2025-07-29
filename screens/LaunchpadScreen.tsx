@@ -239,12 +239,63 @@ export function LaunchpadScreen() {
     try {
       setLoading(true);
 
+      // Convert SOL to lamports
+      const contributionLamports = Math.floor(parseFloat(contributeAmount) * LAMPORTS_PER_SOL);
+
+      // Validate contribution amount against launch requirements
+      if (contributionLamports < selectedLaunch.minContribution) {
+        const minSOL = selectedLaunch.minContribution / LAMPORTS_PER_SOL;
+        Alert.alert(
+          'Contribution Too Low',
+          `Minimum contribution is ${minSOL} SOL (${selectedLaunch.minContribution} lamports). You entered ${contributeAmount} SOL (${contributionLamports} lamports).`,
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+
+      if (contributionLamports > selectedLaunch.maxContribution) {
+        const maxSOL = selectedLaunch.maxContribution / LAMPORTS_PER_SOL;
+        Alert.alert(
+          'Contribution Too High',
+          `Maximum contribution is ${maxSOL} SOL (${selectedLaunch.maxContribution} lamports). You entered ${contributeAmount} SOL (${contributionLamports} lamports).`,
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+
+      // Check token availability (using same calculation as contract)
+      const contributionInLamports = parseFloat(contributeAmount) * LAMPORTS_PER_SOL;
+      const decimals = 9; // Assuming 9 decimals - should match contract
+      const tokensToReceive = Math.floor(
+        (contributionInLamports * Math.pow(10, decimals)) / selectedLaunch.tokenPrice
+      );
+      const availableTokens = selectedLaunch.tokensForSale - selectedLaunch.tokensSold;
+
+      if (tokensToReceive > availableTokens) {
+        const maxAvailableSOL =
+          Math.floor((availableTokens * selectedLaunch.tokenPrice) / Math.pow(10, decimals)) /
+          LAMPORTS_PER_SOL;
+        Alert.alert(
+          'Not Enough Tokens Available',
+          `You're trying to buy ${tokensToReceive.toFixed(0)} tokens, but only ${availableTokens.toLocaleString()} ${selectedLaunch.tokenSymbol} are available.\n\nMaximum you can contribute: ${maxAvailableSOL.toFixed(4)} SOL`,
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+
       const contributionParams: ContributeParams = {
         launchPubkey: new PublicKey(selectedLaunch.creator), // In real implementation, this would be the launch PDA
-        contributionAmount: parseFloat(contributeAmount) * LAMPORTS_PER_SOL,
+        contributionAmount: contributionLamports,
+        tokenMint: selectedLaunch.tokenMint, // Pass the token mint for proper validation
       };
 
       console.log('💰 Contributing to launch with real on-chain transaction:', contributionParams);
+      console.log('💰 Validation passed:', {
+        contributionSOL: contributeAmount,
+        contributionLamports,
+        minRequired: selectedLaunch.minContribution,
+        maxAllowed: selectedLaunch.maxContribution,
+      });
 
       // Use the real on-chain function from SolanaProvider
       const txId = await contributeOnChain(contributionParams);
@@ -678,12 +729,19 @@ export function LaunchpadScreen() {
                 <Text className="mb-2 text-lg font-bold text-white">
                   {selectedLaunch.tokenName} (${selectedLaunch.tokenSymbol})
                 </Text>
-                <Text className="mb-4 text-gray-400">
+                <Text className="mb-2 text-gray-400">
                   Price: {formatSOL(selectedLaunch.tokenPrice)} SOL per token
                 </Text>
-                <Text className="text-gray-400">
-                  Range: {formatSOL(selectedLaunch.minContribution)} -{' '}
-                  {formatSOL(selectedLaunch.maxContribution)} SOL
+                <Text className="mb-2 text-yellow-400">
+                  Minimum: {formatSOL(selectedLaunch.minContribution)} SOL
+                </Text>
+                <Text className="mb-2 text-green-400">
+                  Maximum: {formatSOL(selectedLaunch.maxContribution)} SOL
+                </Text>
+                <Text className="text-purple-400">
+                  Available:{' '}
+                  {(selectedLaunch.tokensForSale - selectedLaunch.tokensSold).toLocaleString()}{' '}
+                  {selectedLaunch.tokenSymbol}
                 </Text>
               </View>
 
@@ -691,21 +749,100 @@ export function LaunchpadScreen() {
                 <Text className="mb-2 font-semibold text-white">Amount to Contribute (SOL)</Text>
                 <TextInput
                   className="rounded-lg border border-dark-border bg-dark-card p-4 text-lg text-white"
-                  placeholder="Enter SOL amount"
+                  placeholder={`Min: ${formatSOL(selectedLaunch.minContribution)} SOL`}
                   placeholderTextColor="#8E8E93"
                   keyboardType="numeric"
                   value={contributeAmount}
                   onChangeText={setContributeAmount}
                 />
+
+                {/* Quick amount buttons */}
+                <View className="mt-2 flex-row space-x-2">
+                  <TouchableOpacity
+                    onPress={() => setContributeAmount(formatSOL(selectedLaunch.minContribution))}
+                    className="flex-1 rounded-lg border border-yellow-400 py-2">
+                    <Text className="text-center text-yellow-400">Min Amount</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() =>
+                      setContributeAmount(formatSOL(selectedLaunch.minContribution * 2))
+                    }
+                    className="flex-1 rounded-lg border border-blue-400 py-2">
+                    <Text className="text-center text-blue-400">2x Min</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => {
+                      // Calculate max based on available tokens (using contract formula)
+                      const availableTokens =
+                        selectedLaunch.tokensForSale - selectedLaunch.tokensSold;
+                      const decimals = 9; // Should match contract
+                      const maxSOLForAvailableTokens =
+                        Math.floor(
+                          (availableTokens * selectedLaunch.tokenPrice) / Math.pow(10, decimals)
+                        ) / LAMPORTS_PER_SOL;
+                      const maxContribution = Math.min(
+                        maxSOLForAvailableTokens,
+                        selectedLaunch.maxContribution / LAMPORTS_PER_SOL
+                      );
+                      setContributeAmount(maxContribution.toFixed(6));
+                    }}
+                    className="flex-1 rounded-lg border border-green-400 py-2">
+                    <Text className="text-center text-green-400">Max Available</Text>
+                  </TouchableOpacity>
+                </View>
+
                 {contributeAmount && (
-                  <Text className="mt-2 text-gray-400">
-                    You will receive: ~
-                    {(
-                      parseFloat(contributeAmount) /
-                      (selectedLaunch.tokenPrice / LAMPORTS_PER_SOL)
-                    ).toFixed(0)}{' '}
-                    {selectedLaunch.tokenSymbol}
-                  </Text>
+                  <View className="mt-2">
+                    <Text className="text-gray-400">
+                      You will receive: ~
+                      {(() => {
+                        const contributionInLamports =
+                          parseFloat(contributeAmount) * LAMPORTS_PER_SOL;
+                        const decimals = 9; // Should match contract
+                        const tokens = Math.floor(
+                          (contributionInLamports * Math.pow(10, decimals)) /
+                            selectedLaunch.tokenPrice
+                        );
+                        return tokens.toLocaleString();
+                      })()}{' '}
+                      {selectedLaunch.tokenSymbol} units
+                    </Text>
+
+                    {/* Validation warnings */}
+                    {parseFloat(contributeAmount) * LAMPORTS_PER_SOL <
+                      selectedLaunch.minContribution && (
+                      <Text className="mt-1 text-red-400">
+                        ⚠️ Below minimum contribution of {formatSOL(selectedLaunch.minContribution)}{' '}
+                        SOL
+                      </Text>
+                    )}
+                    {parseFloat(contributeAmount) * LAMPORTS_PER_SOL >
+                      selectedLaunch.maxContribution && (
+                      <Text className="mt-1 text-red-400">
+                        ⚠️ Above maximum contribution of {formatSOL(selectedLaunch.maxContribution)}{' '}
+                        SOL
+                      </Text>
+                    )}
+
+                    {/* Token availability check */}
+                    {(() => {
+                      const contributionInLamports =
+                        parseFloat(contributeAmount) * LAMPORTS_PER_SOL;
+                      const decimals = 9; // Should match contract
+                      const tokensToReceive = Math.floor(
+                        (contributionInLamports * Math.pow(10, decimals)) /
+                          selectedLaunch.tokenPrice
+                      );
+                      const availableTokens =
+                        selectedLaunch.tokensForSale - selectedLaunch.tokensSold;
+                      return tokensToReceive > availableTokens ? (
+                        <Text className="mt-1 text-red-400">
+                          ⚠️ Not enough tokens available! Only {availableTokens.toLocaleString()}{' '}
+                          {selectedLaunch.tokenSymbol} left
+                        </Text>
+                      ) : null;
+                    })()}
+                  </View>
                 )}
               </View>
 

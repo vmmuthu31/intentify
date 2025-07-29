@@ -707,15 +707,107 @@ export class LaunchpadExecutor {
       );
       console.log('📝 Contributor state PDA:', contributorStatePDA.toString());
 
-      // Get token mint from launch data (removed duplicate declaration)
+      // Get token mint from launch data and validate contribution amount
+      let launchData: LaunchData | null = null;
       try {
-        // Get the launch data to find the token mint
+        // Get the launch data to find the token mint and validate contribution
         const launchAccountInfo = await this.connection.getAccountInfo(launchStatePDA);
         if (launchAccountInfo) {
-          const launchData = await this.deserializeLaunchData(launchAccountInfo.data);
+          launchData = await this.deserializeLaunchData(launchAccountInfo.data);
           if (launchData) {
             tokenMint = launchData.tokenMint;
             console.log('📝 Verified token mint from launch data:', tokenMint.toString());
+            
+            
+            // Validate contribution amount against launch requirements
+            console.log('🔍 Launch requirements:');
+            console.log('  - Min contribution:', launchData.minContribution, 'lamports');
+            console.log('  - Max contribution:', launchData.maxContribution, 'lamports');
+            console.log('  - User contribution:', params.contributionAmount, 'lamports');
+            console.log('  - Token price:', launchData.tokenPrice, 'lamports per token');
+            console.log('  - Tokens for sale:', launchData.tokensForSale);
+            console.log('  - Tokens already sold:', launchData.tokensSold);
+            console.log('  - Available tokens:', launchData.tokensForSale - launchData.tokensSold);
+            
+            if (params.contributionAmount < launchData.minContribution) {
+              const errorMsg = `Contribution amount (${params.contributionAmount} lamports = ${params.contributionAmount / 1e9} SOL) ` +
+                `is below minimum required (${launchData.minContribution} lamports = ${launchData.minContribution / 1e9} SOL)`;
+              console.error('❌ Contribution validation failed:', errorMsg);
+              console.error('📊 Debug info:', {
+                userInput: params.contributionAmount,
+                userInputSOL: params.contributionAmount / 1e9,
+                minRequired: launchData.minContribution,
+                minRequiredSOL: launchData.minContribution / 1e9,
+                difference: launchData.minContribution - params.contributionAmount,
+                differenceSOL: (launchData.minContribution - params.contributionAmount) / 1e9,
+              });
+              throw new Error(errorMsg);
+            }
+            
+            if (params.contributionAmount > launchData.maxContribution) {
+              throw new Error(
+                `Contribution amount (${params.contributionAmount} lamports = ${params.contributionAmount / 1e9} SOL) ` +
+                `exceeds maximum allowed (${launchData.maxContribution} lamports = ${launchData.maxContribution / 1e9} SOL)`
+              );
+            }
+
+            // Calculate tokens that would be received (matching contract logic EXACTLY)
+            // The contract does: amount * 10^decimals / token_price
+            // We need to get the actual token decimals from the mint
+            let decimals = 9; // Default assumption, but let's try to get the real value
+            
+            try {
+              // Try to get the actual mint info to get decimals
+              const mintAccountInfo = await this.connection.getAccountInfo(tokenMint);
+              if (mintAccountInfo && mintAccountInfo.data.length >= 44) {
+                // Parse mint account data to get decimals (at offset 44)
+                decimals = mintAccountInfo.data[44];
+                console.log('📊 Got real token decimals from mint account:', decimals);
+              }
+            } catch {
+              console.warn('⚠️ Could not get mint info, using default decimals:', decimals);
+            }
+            
+            const tokensToReceive = Math.floor((params.contributionAmount * Math.pow(10, decimals)) / launchData.tokenPrice);
+            const availableTokens = launchData.tokensForSale - launchData.tokensSold;
+            
+            console.log('🧮 Token calculation validation (matching contract exactly):');
+            console.log('  - SOL contribution:', params.contributionAmount / 1e9, 'SOL');
+            console.log('  - Token decimals:', decimals);
+            console.log('  - Token price:', launchData.tokenPrice, 'lamports per token');
+            console.log('  - Contract calculation: (', params.contributionAmount, '* 10^', decimals, ') ÷', launchData.tokenPrice);
+            console.log('  - Numerator:', params.contributionAmount * Math.pow(10, decimals));
+            console.log('  - Result: tokens to receive:', tokensToReceive);
+            console.log('  - Available tokens:', availableTokens);
+            console.log('  - Tokens for sale (total):', launchData.tokensForSale);
+            console.log('  - Tokens sold (so far):', launchData.tokensSold);
+            
+            // The issue might be that token_price needs to be interpreted differently
+            // Let's also log what a reasonable token price should be
+            const expectedPriceForReasonableAmount = (params.contributionAmount * Math.pow(10, decimals)) / 10; // Expecting ~10 tokens for 0.1 SOL
+            console.log('💡 Debug: For 10 tokens with this contribution, price should be:', expectedPriceForReasonableAmount);
+
+            if (tokensToReceive > availableTokens) {
+              const maxContributionForAvailableTokens = Math.floor((availableTokens * launchData.tokenPrice) / Math.pow(10, decimals));
+              
+              console.error('❌ Not enough tokens available!');
+              console.error('📊 Problem analysis:');
+              console.error('  - You want to buy:', tokensToReceive.toLocaleString(), 'token units');
+              console.error('  - Available:', availableTokens.toLocaleString(), 'token units');
+              console.error('  - Your contribution:', params.contributionAmount / 1e9, 'SOL');
+              console.error('  - Current token price:', launchData.tokenPrice, 'lamports per token unit');
+              console.error('  - Max you can contribute:', maxContributionForAvailableTokens / 1e9, 'SOL');
+              console.error('  - 💡 The token price might be set incorrectly in the launch');
+              
+              throw new Error(
+                `Not enough tokens available. ` +
+                `You're trying to buy ${tokensToReceive.toLocaleString()} token units, but only ${availableTokens.toLocaleString()} are available. ` +
+                `Maximum SOL you can contribute: ${maxContributionForAvailableTokens / 1e9} SOL. ` +
+                `Note: The token price might be configured incorrectly for this launch.`
+              );
+            }
+            
+            console.log('✅ Contribution amount is within valid range and tokens are available');
           } else {
             throw new Error('Could not deserialize launch data');
           }
@@ -865,6 +957,48 @@ export class LaunchpadExecutor {
     } catch (error) {
       console.error('❌ Launch finalization failed:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Get launch requirements for validation
+   */
+  async getLaunchRequirements(launchPubkey: PublicKey): Promise<{
+    minContribution: number;
+    maxContribution: number;
+    tokenPrice: number;
+    softCap: number;
+    hardCap: number;
+  } | null> {
+    try {
+      console.log('📊 Getting launch requirements for:', launchPubkey.toString());
+
+      // Find the launch state PDA using the creator pubkey
+      const [launchStatePDA] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("launch_state"),
+          launchPubkey.toBuffer(),
+        ],
+        DEVNET_LAUNCHPAD_PROGRAM_ID
+      );
+
+      const launchData = await this.getLaunchData(launchStatePDA);
+      if (!launchData) {
+        console.log('❌ Launch data not found');
+        return null;
+      }
+
+      return {
+        minContribution: launchData.minContribution,
+        maxContribution: launchData.maxContribution,
+        tokenPrice: launchData.tokenPrice,
+        softCap: launchData.softCap,
+        hardCap: launchData.hardCap,
+      };
+
+    } catch (error) {
+      console.error('❌ Failed to get launch requirements:', error);
+      return null;
     }
   }
 
@@ -1464,6 +1598,77 @@ export function createLaunchpadExecutor(
   phantomWallet: PhantomWalletInterface
 ): LaunchpadExecutor {
   return new LaunchpadExecutor(connection, userPublicKey, phantomWallet);
+}
+
+/**
+ * Calculate maximum contribution based on available tokens
+ */
+export function calculateMaxContribution(launchData: LaunchData): {
+  maxByTokens: number; // lamports
+  maxByLimit: number; // lamports  
+  actualMax: number; // lamports
+  availableTokens: number;
+} {
+  const availableTokens = launchData.tokensForSale - launchData.tokensSold;
+  
+  // Calculate max SOL based on available tokens
+  // Using the contract formula: amount * 10^decimals / token_price = tokens
+  // Rearranged: amount = (tokens * token_price) / 10^decimals
+  const decimals = 9; // Assuming 9 decimals - in production, get from mint
+  const maxByTokens = Math.floor((availableTokens * launchData.tokenPrice) / Math.pow(10, decimals));
+  
+  // Max by user limit
+  const maxByLimit = launchData.maxContribution;
+  
+  // Actual max is the smaller of the two
+  const actualMax = Math.min(maxByTokens, maxByLimit);
+  
+  return {
+    maxByTokens,
+    maxByLimit,
+    actualMax,
+    availableTokens,
+  };
+}
+
+/**
+ * Calculate suggested contribution amounts based on launch requirements
+ */
+export function getSuggestedContributions(requirements: {
+  minContribution: number;
+  maxContribution: number;
+  tokenPrice: number;
+}): {
+  minimum: { lamports: number; sol: number; tokens: number };
+  suggested: { lamports: number; sol: number; tokens: number };
+  maximum: { lamports: number; sol: number; tokens: number };
+} {
+  const minLamports = requirements.minContribution;
+  const maxLamports = requirements.maxContribution;
+  
+  // Suggest a middle amount, but at least 10% above minimum
+  const suggestedLamports = Math.max(
+    minLamports * 1.1,
+    Math.min(maxLamports, minLamports + (maxLamports - minLamports) * 0.3)
+  );
+
+  return {
+    minimum: {
+      lamports: minLamports,
+      sol: minLamports / 1e9,
+      tokens: minLamports / requirements.tokenPrice,
+    },
+    suggested: {
+      lamports: Math.floor(suggestedLamports),
+      sol: suggestedLamports / 1e9,
+      tokens: suggestedLamports / requirements.tokenPrice,
+    },
+    maximum: {
+      lamports: maxLamports,
+      sol: maxLamports / 1e9,
+      tokens: maxLamports / requirements.tokenPrice,
+    },
+  };
 }
 
 /**
