@@ -83,7 +83,7 @@ export function PortfolioScreen() {
   const formatAssets = () => {
     const assets = tokenBalances.map((token) => ({
       symbol: token.symbol,
-      name: token.symbol === 'SOL' ? 'Solana' : token.symbol,
+      name: token.name ?? 'Solana',
       balance: token.uiAmount.toLocaleString('en-US', {
         minimumFractionDigits: token.symbol === 'SOL' ? 4 : 0,
         maximumFractionDigits: token.symbol === 'SOL' ? 4 : 0,

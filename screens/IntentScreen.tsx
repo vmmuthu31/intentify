@@ -148,7 +148,7 @@ export function IntentScreen() {
           } catch {
             console.log('⚠️ Background profile fetch failed, keeping basic profile');
           }
-        }, 100);
+        }, 200);
 
         return;
       }

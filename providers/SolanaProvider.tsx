@@ -11,6 +11,7 @@ import * as Haptics from 'expo-haptics';
 import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import { TokenListProvider, TokenInfo } from '@solana/spl-token-registry';
 import { usePhantomWallet } from './PhantomProvider';
+import { getTokenMetadataService } from '../services/token-metadata-service';
 
 import {
   IntentExecutor,
@@ -31,10 +32,12 @@ import {
 interface TokenBalance {
   mint: string;
   symbol: string;
+  name?: string;
   balance: number;
   uiAmount: number;
   decimals: number;
   price?: number;
+  uri?: string;
 }
 
 interface ActiveIntent {
@@ -346,6 +349,22 @@ export function SolanaProvider({ children }: SolanaProviderProps) {
         price: prices?.['So11111111111111111111111111111111111111112']?.value ?? 0,
       });
 
+      // Get metadata service
+      const metadataService = getTokenMetadataService(connection);
+
+      // Fetch metadata for all tokens in parallel
+      console.log('🔍 Fetching metadata for', mintList.length, 'tokens...');
+      const metadataPromises = mintList.map((mint) => metadataService.fetchTokenMetadata(mint));
+      const metadataResults = await Promise.allSettled(metadataPromises);
+
+      // Create metadata map
+      const metadataMap = new Map<string, any>();
+      metadataResults.forEach((result, index) => {
+        if (result.status === 'fulfilled' && result.value) {
+          metadataMap.set(mintList[index], result.value);
+        }
+      });
+
       tokenAccounts.value.forEach(({ account }) => {
         const data = account.data.parsed.info;
         const mint = data.mint;
@@ -355,9 +374,16 @@ export function SolanaProvider({ children }: SolanaProviderProps) {
         if (rawAmount === 0) return;
 
         const uiAmount = rawAmount / Math.pow(10, decimals);
-        const symbol = tokenMap[mint]?.symbol || 'UNKNOWN';
+
+        const metadata = metadataMap.get(mint);
+        const symbol = metadata?.symbol || tokenMap[mint]?.symbol || 'UNKNOWN';
         const price = prices?.[mint]?.value ?? 0;
 
+        console.log(
+          `📋 Token ${mint.slice(0, 8)}... - Symbol: ${symbol}${metadata ? ' (from metadata)' : ' (from registry)'}`
+        );
+
+        console.log('vmfthu', metadata);
         balances.push({
           mint,
           symbol,
@@ -365,11 +391,13 @@ export function SolanaProvider({ children }: SolanaProviderProps) {
           uiAmount,
           decimals,
           price,
+          name: metadata?.name,
+          uri: metadata?.uri || '',
         });
       });
 
       setTokenBalances(balances);
-      console.log('✅ Balances refreshed');
+      console.log('✅ Balances refreshed with metadata');
     } catch (error) {
       console.error('❌ Failed to refresh balances:', error);
     }

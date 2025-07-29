@@ -23,7 +23,10 @@ import {
 import {
   getCreateMetadataAccountV3InstructionDataSerializer,
   MPL_TOKEN_METADATA_PROGRAM_ID,
+  fetchMetadata,
 } from '@metaplex-foundation/mpl-token-metadata';
+import { createUmi } from '@metaplex-foundation/umi-bundle-defaults';
+import { publicKey as umiPublicKey } from '@metaplex-foundation/umi';
 import { Buffer } from 'buffer';
 import { PhantomWalletInterface } from './IntentExecutor';
 
@@ -123,6 +126,120 @@ export class LaunchpadExecutor {
     this.phantomWallet = phantomWallet;
   }
 
+
+  /**
+   * Fetch token metadata from Metaplex
+   */
+  async fetchTokenMetadata(mintAddress: PublicKey): Promise<{
+    name: string;
+    symbol: string;
+    uri: string;
+  } | null> {
+    try {
+      console.log('🔍 Fetching metadata for token:', mintAddress.toString());
+      
+      // Create UMI instance for devnet
+      const umi = createUmi('https://api.devnet.solana.com');
+      
+      // Find metadata PDA
+      const [metadataPDA] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from('metadata'),
+          new PublicKey(MPL_TOKEN_METADATA_PROGRAM_ID).toBuffer(),
+          mintAddress.toBuffer(),
+        ],
+        new PublicKey(MPL_TOKEN_METADATA_PROGRAM_ID)
+      );
+      
+      console.log('📝 Metadata PDA:', metadataPDA.toString());
+      
+      // Convert to UMI public key format
+      const umiMint = umiPublicKey(mintAddress.toString());
+      
+      // Fetch metadata using official Metaplex SDK
+      const metadata = await fetchMetadata(umi, umiMint);
+      
+      console.log('✅ Successfully fetched metadata:', {
+        name: metadata.name,
+        symbol: metadata.symbol,
+        uri: metadata.uri
+      });
+      
+      return {
+        name: metadata.name.trim(),
+        symbol: metadata.symbol.trim(),
+        uri: metadata.uri.trim()
+      };
+      
+    } catch (error) {
+      console.warn('⚠️ Failed to fetch metadata for token:', mintAddress.toString(), error);
+      return null;
+    }
+  }
+
+  /**
+   * Fetch token metadata from blockchain manually (fallback method)
+   */
+  async fetchTokenMetadataManual(mintAddress: PublicKey): Promise<{
+    name: string;
+    symbol: string;
+    uri: string;
+  } | null> {
+    try {
+      console.log('🔍 Fetching metadata manually for token:', mintAddress.toString());
+      
+      // Find metadata PDA
+      const [metadataPDA] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from('metadata'),
+          new PublicKey(MPL_TOKEN_METADATA_PROGRAM_ID).toBuffer(),
+          mintAddress.toBuffer(),
+        ],
+        new PublicKey(MPL_TOKEN_METADATA_PROGRAM_ID)
+      );
+      
+      console.log('📝 Metadata PDA:', metadataPDA.toString());
+      
+      // Get account info
+      const accountInfo = await this.connection.getAccountInfo(metadataPDA);
+      if (!accountInfo) {
+        console.log('❌ No metadata account found');
+        return null;
+      }
+      
+      console.log('✅ Found metadata account, data length:', accountInfo.data.length);
+      
+      // Parse metadata manually - this is a simplified parser
+      // In production, you'd use the official Metaplex deserializer
+      const data = accountInfo.data;
+      let offset = 1 + 32 + 32; // Skip account discriminator + key + update_authority
+      
+      // Read name length and name
+      const nameLength = data.readUInt32LE(offset);
+      offset += 4;
+      const name = data.slice(offset, offset + nameLength).toString('utf8').trim().replace(/\0/g, '');
+      offset += nameLength;
+      
+      // Read symbol length and symbol  
+      const symbolLength = data.readUInt32LE(offset);
+      offset += 4;
+      const symbol = data.slice(offset, offset + symbolLength).toString('utf8').trim().replace(/\0/g, '');
+      offset += symbolLength;
+      
+      // Read URI length and URI
+      const uriLength = data.readUInt32LE(offset);
+      offset += 4;
+      const uri = data.slice(offset, offset + uriLength).toString('utf8').trim().replace(/\0/g, '');
+      
+      console.log('✅ Successfully parsed metadata:', { name, symbol, uri });
+      
+      return { name, symbol, uri };
+      
+    } catch (error) {
+      console.warn('⚠️ Failed to fetch metadata manually for token:', mintAddress.toString(), error);
+      return null;
+    }
+  }
 
   /**
    * Test token launch creation with simulation (for debugging)

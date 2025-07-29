@@ -24,6 +24,7 @@ interface Token {
   balance: string;
   price: string;
   rugScore: number;
+  mint?: string;
   icon?: string;
 }
 
@@ -50,10 +51,11 @@ export function IntentBuilder({ intentType, onClose, onCreateIntent }: IntentBui
   // Convert tokenBalances to Token interface
   const availableTokens: Token[] = tokenBalances.map((token) => ({
     symbol: token.symbol,
-    name: token.symbol,
-    balance: token.uiAmount.toString(),
+    name: token.name ?? '',
+    balance: token.uiAmount.toFixed(token.decimals || 6),
     price: `$${token.price?.toFixed(token.symbol === 'BONK' ? 6 : 2) || '0.00'}`,
     rugScore: token.symbol === 'SOL' ? 98 : token.symbol === 'USDC' ? 100 : 85,
+    mint: token.mint,
   }));
 
   const getRugScoreColor = (score: number) => {
