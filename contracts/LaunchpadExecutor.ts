@@ -1,5 +1,6 @@
 import "react-native-get-random-values";
 import "react-native-url-polyfill/auto";
+import * as Crypto from 'expo-crypto';
 import {
   Connection,
   PublicKey,
@@ -8,32 +9,29 @@ import {
   LAMPORTS_PER_SOL,
   TransactionInstruction,
   Keypair,
-  clusterApiUrl,
   ComputeBudgetProgram,
 } from '@solana/web3.js';
 import {
   TOKEN_PROGRAM_ID,
-  ASSOCIATED_TOKEN_PROGRAM_ID,
   getAssociatedTokenAddress,
   createAssociatedTokenAccountInstruction,
   createInitializeMintInstruction,
   createMintToInstruction,
-  createTransferInstruction,
-  getMint,
   MINT_SIZE,
   getMinimumBalanceForRentExemptMint,
 } from '@solana/spl-token';
 // Note: In a production app, you would use proper Metaplex libraries
 // For this demo, we'll create simplified metadata handling
-import { BN } from '@coral-xyz/anchor';
-import bs58 from 'bs58';
 import { Buffer } from 'buffer';
+import { PhantomWalletInterface } from './IntentExecutor';
 
 // Try to import AsyncStorage, but provide a fallback if it fails
+// eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-explicit-any
 let AsyncStorage: any;
 try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
   AsyncStorage = require('@react-native-async-storage/async-storage').default;
-} catch (error) {
+} catch {
   // Provide a fallback implementation if AsyncStorage is not available
   console.log('AsyncStorage not available, using memory storage fallback');
   AsyncStorage = {
@@ -54,8 +52,16 @@ export const LAUNCHPAD_TREASURY = new PublicKey('GYLkraPfvT3UtUbdxcHiVWV2EShBoZt
 // Devnet launchpad program ID (you would deploy your own program)
 export const DEVNET_LAUNCHPAD_PROGRAM_ID = new PublicKey('5y2X9WML5ttrWrxzUfGrLSxbXfEcKTyV1dDyw2jXW1Zg');
 
-// Import the PhantomWalletInterface from IntentExecutor to ensure consistency
-import { PhantomWalletInterface } from './IntentExecutor';
+// Calculate the Anchor instruction discriminator based on method name
+async function deriveDiscriminator(name: string): Promise<Buffer> {
+  // Using expo-crypto which has a different API than Node's crypto
+  const data = await Crypto.digestStringAsync(
+    Crypto.CryptoDigestAlgorithm.SHA256,
+    `global:${name}`
+  );
+  // Convert hex string to Buffer and take first 8 bytes
+  return Buffer.from(data, 'hex').slice(0, 8);
+}
 
 // Launch parameters
 export interface CreateLaunchParams {
@@ -115,6 +121,118 @@ export class LaunchpadExecutor {
     this.phantomWallet = phantomWallet;
   }
 
+
+  /**
+   * Test token launch creation with simulation (for debugging)
+   */
+  async testTokenLaunchCreation(params: CreateLaunchParams): Promise<{success: boolean, tokenMint?: string, error?: string}> {
+    try {
+      console.log('🧪 Testing token launch creation...');
+      
+      // Use same approach as createTokenLaunch - CREATE_WITH_SEED
+      const mintSeed = "token_mint_" + Date.now().toString().slice(-8);
+      const mintPubkey = await PublicKey.createWithSeed(
+        this.userPublicKey,
+        mintSeed,
+        TOKEN_PROGRAM_ID
+      );
+      
+      console.log('🪙 Deterministic token mint:', mintPubkey.toString());
+      console.log('🔑 Mint seed:', mintSeed);
+      
+      // Find PDAs (using same pattern as contract)
+      const [launchStatePDA] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("launch_state"),
+          this.userPublicKey.toBuffer(),
+          // Removed mint - contract uses [launch_state, creator] pattern
+        ],
+        DEVNET_LAUNCHPAD_PROGRAM_ID
+      );
+      
+      const [launchpadStatePDA] = PublicKey.findProgramAddressSync(
+        [Buffer.from("launchpad_state")],
+        DEVNET_LAUNCHPAD_PROGRAM_ID
+      );
+      
+      console.log('📝 Launch state PDA:', launchStatePDA.toString());
+      console.log('📝 Launchpad state PDA:', launchpadStatePDA.toString());
+      
+      // Check if launchpad state exists
+      const launchpadInfo = await this.connection.getAccountInfo(launchpadStatePDA);
+      if (!launchpadInfo) {
+        return {
+          success: false,
+          error: 'Launchpad state account not found - protocol may not be initialized'
+        };
+      }
+      
+      console.log('✅ Launchpad state exists');
+      
+      // Get instruction discriminator
+      const discriminator = await deriveDiscriminator('create_token_launch');
+      console.log('🔍 Instruction discriminator:', discriminator.toString('hex'));
+      
+      // Test data serialization
+      const launchParamsData = Buffer.alloc(500);
+      let offset = 0;
+      
+      // Serialize all fields (same as in createTokenLaunch)
+      const tokenNameBuffer = Buffer.from(params.tokenName);
+      launchParamsData.writeUInt32LE(tokenNameBuffer.length, offset);
+      offset += 4;
+      tokenNameBuffer.copy(launchParamsData, offset);
+      offset += tokenNameBuffer.length;
+      
+      const tokenSymbolBuffer = Buffer.from(params.tokenSymbol);
+      launchParamsData.writeUInt32LE(tokenSymbolBuffer.length, offset);
+      offset += 4;
+      tokenSymbolBuffer.copy(launchParamsData, offset);
+      offset += tokenSymbolBuffer.length;
+      
+      const tokenUriBuffer = Buffer.from(params.tokenUri);
+      launchParamsData.writeUInt32LE(tokenUriBuffer.length, offset);
+      offset += 4;
+      tokenUriBuffer.copy(launchParamsData, offset);
+      offset += tokenUriBuffer.length;
+      
+      launchParamsData.writeBigUInt64LE(BigInt(params.softCap), offset);
+      offset += 8;
+      launchParamsData.writeBigUInt64LE(BigInt(params.hardCap), offset);
+      offset += 8;
+      launchParamsData.writeBigUInt64LE(BigInt(params.tokenPrice), offset);
+      offset += 8;
+      launchParamsData.writeBigUInt64LE(BigInt(params.tokensForSale), offset);
+      offset += 8;
+      launchParamsData.writeBigUInt64LE(BigInt(params.minContribution), offset);
+      offset += 8;
+      launchParamsData.writeBigUInt64LE(BigInt(params.maxContribution), offset);
+      offset += 8;
+      launchParamsData.writeBigInt64LE(BigInt(params.launchDuration), offset);
+      offset += 8;
+      
+      const instructionData = Buffer.concat([
+        discriminator,
+        launchParamsData.slice(0, offset)
+      ]);
+      
+      console.log('📊 Serialized data size:', instructionData.length, 'bytes');
+      console.log('✅ Token launch test completed successfully');
+      
+      return {
+        success: true,
+        tokenMint: mintPubkey.toString()
+      };
+      
+    } catch (error) {
+      console.error('❌ Token launch test failed:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }
+
   /**
    * Create a complete token launch (token creation + launch setup)
    */
@@ -128,14 +246,31 @@ export class LaunchpadExecutor {
 
       console.log('📱 Using real on-chain token launch with contract: 5y2X9WML5ttrWrxzUfGrLSxbXfEcKTyV1dDyw2jXW1Zg');
       
-      // Generate a keypair for the new token mint
-      const tokenMintKeypair = Keypair.generate();
-      console.log('🪙 Generated token mint keypair:', tokenMintKeypair.publicKey.toString());
+      // APPROACH: Use createAccountWithSeed to avoid multiple signers
+      // Phantom mobile wallet cannot handle transactions with multiple keypair signers
+      
+      console.log('🪙 Creating deterministic token mint...');
+      
+      // Create deterministic mint address using user's pubkey + timestamp for uniqueness
+      const timestamp = Date.now().toString().slice(-8);
+      const mintSeed = `token_mint_${timestamp}`;
+      const mintPubkey = await PublicKey.createWithSeed(
+        this.userPublicKey,
+        mintSeed,
+        TOKEN_PROGRAM_ID
+      );
+      
+      console.log('🪙 Deterministic mint address:', mintPubkey.toString());
+      console.log('🔑 Mint seed:', mintSeed);
 
-      // Create transaction for token mint creation and launch
+      // Calculate rent for mint account
+      const mintRent = await getMinimumBalanceForRentExemptMint(this.connection);
+      console.log('💸 Mint rent:', mintRent, 'lamports');
+
+      // Create single transaction for complete token launch
       const transaction = new Transaction();
       
-      // Add compute budget instructions to increase the compute limit
+      // Add compute budget instructions
       transaction.add(
         ComputeBudgetProgram.setComputeUnitLimit({
           units: 400000
@@ -148,30 +283,86 @@ export class LaunchpadExecutor {
         })
       );
 
-      // 1. Create token mint account
-      const mintRent = await getMinimumBalanceForRentExemptMint(this.connection);
+      // Step 1: Create token mint account using createAccountWithSeed
       transaction.add(
-        SystemProgram.createAccount({
+        SystemProgram.createAccountWithSeed({
           fromPubkey: this.userPublicKey,
-          newAccountPubkey: tokenMintKeypair.publicKey,
-          lamports: mintRent,
+          basePubkey: this.userPublicKey,
+          seed: mintSeed,
+          newAccountPubkey: mintPubkey,
           space: MINT_SIZE,
+          lamports: mintRent,
           programId: TOKEN_PROGRAM_ID,
         })
       );
 
-      // 2. Initialize the mint with the user as mint authority
+      // Step 2: Initialize the mint
       transaction.add(
         createInitializeMintInstruction(
-          tokenMintKeypair.publicKey,
+          mintPubkey,
           params.decimals,
-          this.userPublicKey,
-          this.userPublicKey,
-          TOKEN_PROGRAM_ID
+          this.userPublicKey, // mint authority
+          this.userPublicKey // freeze authority
         )
       );
 
-      // Find the launch state PDA
+      const METADATA_PROGRAM_ID = new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
+      
+      const [metadataPDA] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from('metadata'),
+          METADATA_PROGRAM_ID.toBuffer(),
+          mintPubkey.toBuffer(),
+        ],
+        METADATA_PROGRAM_ID
+      );
+
+      console.log('📝 Metadata PDA:', metadataPDA.toString());
+
+      const metadataInstruction = new TransactionInstruction({
+        keys: [
+          { pubkey: metadataPDA, isSigner: false, isWritable: true }, 
+          { pubkey: mintPubkey, isSigner: false, isWritable: false },
+          { pubkey: this.userPublicKey, isSigner: true, isWritable: false }, // mint authority
+          { pubkey: this.userPublicKey, isSigner: true, isWritable: true }, // payer
+          { pubkey: this.userPublicKey, isSigner: false, isWritable: false }, // update authority
+          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // system program
+          { pubkey: new PublicKey('SysvarRent111111111111111111111111111111111'), isSigner: false, isWritable: false }, // rent
+        ],
+        programId: METADATA_PROGRAM_ID,
+        data: this.createMetadataInstructionData(params.tokenName, params.tokenSymbol, params.tokenUri)
+      });
+
+      transaction.add(metadataInstruction);
+      console.log('✅ Added metadata creation instruction');
+
+      // Step 3: Create associated token account for the creator (to hold tokens for sale)
+      const creatorTokenAccount = await getAssociatedTokenAddress(
+        mintPubkey,
+        this.userPublicKey
+      );
+
+      transaction.add(
+        createAssociatedTokenAccountInstruction(
+          this.userPublicKey,
+          creatorTokenAccount,
+          this.userPublicKey,
+          mintPubkey
+        )
+      );
+
+      // Step 4: Mint tokens to creator's account (tokens for sale)
+      const tokensToMint = BigInt(params.tokensForSale) * BigInt(Math.pow(10, params.decimals));
+      transaction.add(
+        createMintToInstruction(
+          mintPubkey,
+          creatorTokenAccount,
+          this.userPublicKey,
+          tokensToMint
+        )
+      );
+
+      // Find PDAs using same pattern as test script
       const [launchStatePDA] = PublicKey.findProgramAddressSync(
         [
           Buffer.from("launch_state"),
@@ -181,84 +372,98 @@ export class LaunchpadExecutor {
       );
       console.log('📝 Launch state PDA:', launchStatePDA.toString());
 
-      // Find the launchpad state PDA
       const [launchpadStatePDA] = PublicKey.findProgramAddressSync(
         [Buffer.from("launchpad_state")],
         DEVNET_LAUNCHPAD_PROGRAM_ID
       );
       console.log('📝 Launchpad state PDA:', launchpadStatePDA.toString());
 
-      // Serialize the launch params
-      const launchParamsData = Buffer.alloc(500); // Allocate enough space
-      let offset = 0;
+      // Check if launch state already exists (each wallet can only create one launch)
+      const existingLaunchState = await this.connection.getAccountInfo(launchStatePDA);
+      if (existingLaunchState) {
+        throw new Error(
+          `Launch state already exists for this wallet. Each wallet can only create one token launch. ` +
+          `Launch State PDA: ${launchStatePDA.toString()}. ` +
+          `Use a different wallet to create additional launches.`
+        );
+      }
+      console.log('✅ Launch state PDA is available - proceeding with creation');
+
+      // Step 3: Serialize launch params (like test script)
+      const launchParamsData = Buffer.alloc(500);
+      let launchOffset = 0;
       
       // token_name
       const tokenNameBuffer = Buffer.from(params.tokenName);
-      launchParamsData.writeUInt32LE(tokenNameBuffer.length, offset);
-      offset += 4;
-      tokenNameBuffer.copy(launchParamsData, offset);
-      offset += tokenNameBuffer.length;
+      launchParamsData.writeUInt32LE(tokenNameBuffer.length, launchOffset);
+      launchOffset += 4;
+      tokenNameBuffer.copy(launchParamsData, launchOffset);
+      launchOffset += tokenNameBuffer.length;
       
       // token_symbol
       const tokenSymbolBuffer = Buffer.from(params.tokenSymbol);
-      launchParamsData.writeUInt32LE(tokenSymbolBuffer.length, offset);
-      offset += 4;
-      tokenSymbolBuffer.copy(launchParamsData, offset);
-      offset += tokenSymbolBuffer.length;
+      launchParamsData.writeUInt32LE(tokenSymbolBuffer.length, launchOffset);
+      launchOffset += 4;
+      tokenSymbolBuffer.copy(launchParamsData, launchOffset);
+      launchOffset += tokenSymbolBuffer.length;
       
       // token_uri
       const tokenUriBuffer = Buffer.from(params.tokenUri);
-      launchParamsData.writeUInt32LE(tokenUriBuffer.length, offset);
-      offset += 4;
-      tokenUriBuffer.copy(launchParamsData, offset);
-      offset += tokenUriBuffer.length;
+      launchParamsData.writeUInt32LE(tokenUriBuffer.length, launchOffset);
+      launchOffset += 4;
+      tokenUriBuffer.copy(launchParamsData, launchOffset);
+      launchOffset += tokenUriBuffer.length;
       
       // soft_cap
-      launchParamsData.writeBigUInt64LE(BigInt(params.softCap), offset);
-      offset += 8;
+      launchParamsData.writeBigUInt64LE(BigInt(params.softCap), launchOffset);
+      launchOffset += 8;
       
       // hard_cap
-      launchParamsData.writeBigUInt64LE(BigInt(params.hardCap), offset);
-      offset += 8;
+      launchParamsData.writeBigUInt64LE(BigInt(params.hardCap), launchOffset);
+      launchOffset += 8;
       
       // token_price
-      launchParamsData.writeBigUInt64LE(BigInt(params.tokenPrice), offset);
-      offset += 8;
+      launchParamsData.writeBigUInt64LE(BigInt(params.tokenPrice), launchOffset);
+      launchOffset += 8;
       
       // tokens_for_sale
-      launchParamsData.writeBigUInt64LE(BigInt(params.tokensForSale), offset);
-      offset += 8;
+      launchParamsData.writeBigUInt64LE(BigInt(params.tokensForSale), launchOffset);
+      launchOffset += 8;
       
       // min_contribution
-      launchParamsData.writeBigUInt64LE(BigInt(params.minContribution), offset);
-      offset += 8;
+      launchParamsData.writeBigUInt64LE(BigInt(params.minContribution), launchOffset);
+      launchOffset += 8;
       
       // max_contribution
-      launchParamsData.writeBigUInt64LE(BigInt(params.maxContribution), offset);
-      offset += 8;
+      launchParamsData.writeBigUInt64LE(BigInt(params.maxContribution), launchOffset);
+      launchOffset += 8;
       
       // launch_duration
-      launchParamsData.writeBigInt64LE(BigInt(params.launchDuration), offset);
-      offset += 8;
+      launchParamsData.writeBigInt64LE(BigInt(params.launchDuration), launchOffset);
+      launchOffset += 8;
       
-      // Create the instruction data
-      const instructionData = Buffer.concat([
-        Buffer.from([1]), // 1 = create_token_launch instruction index
-        launchParamsData.slice(0, offset)
+      // Get the instruction discriminator for create_token_launch
+      const launchDiscriminator = await deriveDiscriminator('create_token_launch');
+      console.log('🔍 Launch discriminator:', launchDiscriminator.toString('hex'));
+
+      // Create the instruction data with proper Anchor discriminator
+      const launchInstructionData = Buffer.concat([
+        launchDiscriminator, // 8-byte Anchor discriminator for create_token_launch
+        launchParamsData.slice(0, launchOffset)
       ]);
 
-      // 3. Add the create_token_launch instruction
+      // Step 5: Add create_token_launch instruction (like test script)
       transaction.add(
         new TransactionInstruction({
           keys: [
-            { pubkey: this.userPublicKey, isSigner: true, isWritable: true },
-            { pubkey: launchpadStatePDA, isSigner: false, isWritable: true },
-            { pubkey: launchStatePDA, isSigner: false, isWritable: true },
-            { pubkey: tokenMintKeypair.publicKey, isSigner: false, isWritable: false },
-            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+            { pubkey: this.userPublicKey, isSigner: true, isWritable: true }, // creator
+            { pubkey: launchpadStatePDA, isSigner: false, isWritable: true }, // launchpad_state
+            { pubkey: launchStatePDA, isSigner: false, isWritable: true }, // launch_state (will be created)
+            { pubkey: mintPubkey, isSigner: false, isWritable: false }, // token_mint
+            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // system_program
           ],
           programId: DEVNET_LAUNCHPAD_PROGRAM_ID,
-          data: instructionData
+          data: launchInstructionData
         })
       );
 
@@ -267,23 +472,34 @@ export class LaunchpadExecutor {
       transaction.recentBlockhash = blockhash;
       transaction.feePayer = this.userPublicKey;
 
-      // Sign the transaction with the token mint keypair
-      transaction.partialSign(tokenMintKeypair);
-
-      console.log('📝 Launch transaction created with instructions:', transaction.instructions.length);
-      console.log('📝 Transaction blockhash:', transaction.recentBlockhash.slice(0, 10) + '...');
-      console.log('📝 Transaction feePayer:', transaction.feePayer.toString().slice(0, 10) + '...');
-      console.log('📝 Transaction signed by token mint keypair');
-
-      // Send the transaction via Phantom
-      console.log('🦄 Sending transaction via PhantomWallet.signTransaction...');
+      console.log('📋 Transaction details:');
+      console.log('  - Instructions:', transaction.instructions.length);
+      console.log('  - Token Mint:', mintPubkey.toString());
+      console.log('  - Creator Token Account (for minting):', creatorTokenAccount.toString());
+      console.log('  - Launch State PDA:', launchStatePDA.toString());
+      console.log('  - Launchpad State PDA:', launchpadStatePDA.toString());
+      console.log('  - Tokens for Sale:', params.tokensForSale);
+      console.log('  - Data Size:', launchInstructionData.length, 'bytes');
       
-      // Store the token mint public key in localStorage for future reference
-      await AsyncStorage.setItem('last_created_token_mint', tokenMintKeypair.publicKey.toString());
+      // Store the token mint public key for future reference
+      await AsyncStorage.setItem('last_created_token_mint', mintPubkey.toString());
       
+      // NO partialSign needed - user is the only signer!
+      // This was the source of the signature verification error
+      
+      console.log('🦄 Sending complete token launch transaction to Phantom...');
       const result = await this.phantomWallet.signTransaction(transaction, onSuccess);
       
-      console.log('✅ Transaction sent to Phantom, result:', result || 'pending_signature');
+      console.log('✅ Token launch created successfully:', result || 'pending_signature');
+      
+      // Additional success logging
+      if (result) {
+        console.log('🎉 Complete token launch process finished!');
+        console.log('  - Token Mint Address:', mintPubkey.toString());
+        console.log('  - Launch Transaction:', result);
+        console.log('  - View on Explorer:', `https://explorer.solana.com/tx/${result}?cluster=devnet`);
+      }
+      
       return result || 'pending_signature';
     } catch (error) {
       console.error('❌ Token launch creation failed:', error);
@@ -291,46 +507,6 @@ export class LaunchpadExecutor {
     }
   }
 
-  /**
-   * Simulate a successful launch creation by adding a fake launch to our state
-   * This is for demo purposes only - in a real implementation, you would fetch the actual launch data from the blockchain
-   */
-  private simulateSuccessfulLaunch(params: CreateLaunchParams): void {
-    try {
-      console.log('🎮 Simulating successful launch creation for demo purposes');
-      
-      // Create a fake launch data object
-      const fakeLaunch: LaunchData = {
-        creator: this.userPublicKey,
-        tokenMint: new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'), // USDC devnet address
-        tokenName: params.tokenName,
-        tokenSymbol: params.tokenSymbol,
-        tokenUri: params.tokenUri,
-        softCap: params.softCap,
-        hardCap: params.hardCap,
-        tokenPrice: params.tokenPrice,
-        tokensForSale: params.tokensForSale,
-        minContribution: params.minContribution,
-        maxContribution: params.maxContribution,
-        launchStart: Math.floor(Date.now() / 1000),
-        launchEnd: Math.floor(Date.now() / 1000) + params.launchDuration,
-        totalRaised: 0,
-        totalContributors: 0,
-        tokensSold: 0,
-        status: 'Active',
-        isFinalized: false,
-      };
-      
-      // In a real implementation, this would be stored on the blockchain
-      // For demo purposes, we'll just store it in memory
-      this._simulatedLaunches = this._simulatedLaunches || [];
-      this._simulatedLaunches.push(fakeLaunch);
-      
-      console.log('✅ Simulated launch created successfully:', fakeLaunch.tokenName);
-    } catch (error) {
-      console.error('❌ Failed to simulate launch creation:', error);
-    }
-  }
   
   // Storage for simulated launches
   private _simulatedLaunches: LaunchData[] = [];
@@ -367,11 +543,33 @@ export class LaunchpadExecutor {
       // For now, we'll assume the launch pubkey is the creator's pubkey
       const creator = params.launchPubkey;
 
-      // Find the launch state PDA
+      // First, get the token mint from params or storage to construct the correct PDA
+      let tokenMint: PublicKey;
+      try {
+        if (params.tokenMint) {
+          tokenMint = params.tokenMint;
+          console.log('📝 Using token mint from params:', tokenMint.toString());
+        } else {
+          // Fallback to saved token mint
+          const savedTokenMint = await AsyncStorage.getItem('last_created_token_mint');
+          if (savedTokenMint) {
+            tokenMint = new PublicKey(savedTokenMint);
+            console.log('📝 Using saved token mint:', tokenMint.toString());
+          } else {
+            throw new Error('Token mint not provided and no saved token mint found');
+          }
+        }
+      } catch (error) {
+        console.error('❌ Error determining token mint:', error);
+        throw new Error('Could not determine token mint for contribution');
+      }
+
+      // Find the launch state PDA (using same pattern as contract expects)
       const [launchStatePDA] = PublicKey.findProgramAddressSync(
         [
           Buffer.from("launch_state"),
           creator.toBuffer(),
+          // Removed mint - contract uses [launch_state, creator] pattern
         ],
         DEVNET_LAUNCHPAD_PROGRAM_ID
       );
@@ -395,42 +593,57 @@ export class LaunchpadExecutor {
       );
       console.log('📝 Contributor state PDA:', contributorStatePDA.toString());
 
-      // Try to get the token mint from AsyncStorage or use a default
-      let tokenMint: PublicKey;
+      // Get token mint from launch data (removed duplicate declaration)
       try {
+        // Get the launch data to find the token mint
+        const launchAccountInfo = await this.connection.getAccountInfo(launchStatePDA);
+        if (launchAccountInfo) {
+          const launchData = this.deserializeLaunchData(launchAccountInfo.data);
+          if (launchData) {
+            tokenMint = launchData.tokenMint;
+            console.log('📝 Verified token mint from launch data:', tokenMint.toString());
+          } else {
+            throw new Error('Could not deserialize launch data');
+          }
+        } else {
+          throw new Error('Launch account not found');
+        }
+      } catch (error) {
+        console.error('❌ Error getting launch token mint:', error);
+        // Fallback to saved token mint
         const savedTokenMint = await AsyncStorage.getItem('last_created_token_mint');
         if (savedTokenMint) {
           tokenMint = new PublicKey(savedTokenMint);
-          console.log('📝 Using saved token mint from previous launch:', tokenMint.toString());
+          console.log('📝 Using fallback saved token mint:', tokenMint.toString());
         } else {
-          // If no saved token mint, use the one from the params or a default
-          tokenMint = params.tokenMint || new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
-          console.log('📝 Using token mint from params:', tokenMint.toString());
+          throw new Error('Could not determine token mint for contribution');
         }
-      } catch (error) {
-        console.error('❌ Error getting token mint, using default:', error);
-        tokenMint = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
       }
 
-      // Create the instruction data
+      // Get the instruction discriminator for contribute_to_launch
+      const discriminator = await deriveDiscriminator('contribute_to_launch');
+      console.log('🔍 Instruction discriminator:', discriminator.toString('hex'));
+      
+      // Create amount buffer
+      const amountBuffer = Buffer.alloc(8);
+      amountBuffer.writeBigUInt64LE(BigInt(params.contributionAmount));
+
+      // Create the instruction data with proper Anchor discriminator
       const instructionData = Buffer.concat([
-        Buffer.from([2]), // 2 = contribute_to_launch instruction index
-        Buffer.alloc(8).fill(0) // amount (u64)
+        discriminator, // 8-byte Anchor discriminator for contribute_to_launch
+        amountBuffer // amount (u64)
       ]);
 
-      // Write the amount to the instruction data
-      instructionData.writeBigUInt64LE(BigInt(params.contributionAmount), 1);
-
-      // Add the contribute_to_launch instruction
+      // Add the contribute_to_launch instruction (exactly matching contract structure)
       transaction.add(
         new TransactionInstruction({
           keys: [
-            { pubkey: this.userPublicKey, isSigner: true, isWritable: true },
-            { pubkey: launchStatePDA, isSigner: false, isWritable: true },
-            { pubkey: contributorStatePDA, isSigner: false, isWritable: true },
-            { pubkey: launchpadStatePDA, isSigner: false, isWritable: true },
-            { pubkey: tokenMint, isSigner: false, isWritable: false },
-            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+            { pubkey: this.userPublicKey, isSigner: true, isWritable: true }, // contributor
+            { pubkey: launchStatePDA, isSigner: false, isWritable: true }, // launch_state
+            { pubkey: contributorStatePDA, isSigner: false, isWritable: true }, // contributor_state
+            { pubkey: launchpadStatePDA, isSigner: false, isWritable: true }, // launchpad_state
+            { pubkey: tokenMint, isSigner: false, isWritable: false }, // token_mint
+            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // system_program
           ],
           programId: DEVNET_LAUNCHPAD_PROGRAM_ID,
           data: instructionData
@@ -490,18 +703,23 @@ export class LaunchpadExecutor {
       // For now, we'll assume the launch pubkey is the creator's pubkey
       const creator = launchPubkey;
 
-      // Find the launch state PDA
+      // Find the launch state PDA (using same pattern as contract)
       const [launchStatePDA] = PublicKey.findProgramAddressSync(
         [
           Buffer.from("launch_state"),
           creator.toBuffer(),
+          // Removed mint - contract uses [launch_state, creator] pattern
         ],
         DEVNET_LAUNCHPAD_PROGRAM_ID
       );
       console.log('📝 Launch state PDA:', launchStatePDA.toString());
 
-      // Create the instruction data
-      const instructionData = Buffer.from([3]); // 3 = finalize_launch instruction index
+      // Get the instruction discriminator for finalize_launch
+      const discriminator = await deriveDiscriminator('finalize_launch');
+      console.log('🔍 Instruction discriminator:', discriminator.toString('hex'));
+      
+      // Create the instruction data with proper Anchor discriminator
+      const instructionData = discriminator; // Just the discriminator is needed for this instruction
 
       // Add the finalize_launch instruction
       transaction.add(
@@ -569,37 +787,39 @@ export class LaunchpadExecutor {
     try {
       console.log('📋 Fetching all active launches...');
 
-      // In a real implementation, you would use getProgramAccounts
-      // to fetch all launch accounts from your program
-      const accounts = await this.connection.getProgramAccounts(DEVNET_LAUNCHPAD_PROGRAM_ID, {
-        filters: [
-          {
-            memcmp: {
-              offset: 8 + 32 + 32, // Skip discriminator, creator and token_mint
-              bytes: bs58.encode(Buffer.from([0])), // 0 = LaunchStatus::Active
-            },
-          },
-        ],
-      });
+      // Fetch all program accounts without filters first
+      // The previous memcmp filter was using wrong offset due to variable-length strings
+      console.log('🔍 Fetching all program accounts for:', DEVNET_LAUNCHPAD_PROGRAM_ID.toString());
+      const accounts = await this.connection.getProgramAccounts(DEVNET_LAUNCHPAD_PROGRAM_ID);
+      
+      console.log(`📊 Found ${accounts.length} total program accounts`);
       
       const launches: LaunchData[] = [];
       for (const account of accounts) {
         try {
+          // Try to deserialize each account as launch data
           const launchData = this.deserializeLaunchData(account.account.data);
           if (launchData) {
-            launches.push(launchData);
+            // Only include active launches
+            if (launchData.status === 'Active') {
+              launches.push(launchData);
+              console.log(`✅ Found active launch: ${launchData.tokenName} (${launchData.tokenSymbol})`);
+            } else {
+              console.log(`📝 Skipped non-active launch: ${launchData.tokenName} - status: ${launchData.status}`);
+            }
           }
         } catch (error) {
-          console.warn('Failed to deserialize launch data:', error);
+          console.warn('⚠️ Failed to deserialize account data (might not be a launch account):', error);
         }
       }
 
       // Also include any simulated launches (for testing)
       if (this._simulatedLaunches && this._simulatedLaunches.length > 0) {
         launches.push(...this._simulatedLaunches);
+        console.log(`📝 Added ${this._simulatedLaunches.length} simulated launches`);
       }
 
-      console.log(`✅ Found ${launches.length} active launches`);
+      console.log(`✅ Found ${launches.length} active launches total`);
       return launches;
 
     } catch (error) {
@@ -617,7 +837,7 @@ export class LaunchpadExecutor {
       
       // Create a new transaction and get the latest blockhash immediately
       console.log('🔍 Getting recent blockhash for launch transaction...');
-      const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash('finalized');
+      const { blockhash } = await this.connection.getLatestBlockhash('finalized');
       const transaction = new Transaction();
       transaction.recentBlockhash = blockhash;
       transaction.feePayer = this.userPublicKey;
@@ -842,6 +1062,73 @@ export class LaunchpadExecutor {
   }
 
   /**
+   * Create Metaplex metadata instruction data for CreateMetadataAccountV3
+   */
+  private createMetadataInstructionData(name: string, symbol: string, uri: string): Buffer {
+    // Instruction discriminator for CreateMetadataAccountV3 (first 8 bytes)
+    const discriminator = Buffer.from([51, 57, 225, 47, 182, 146, 137, 166]);
+    
+    // Serialize the DataV2 struct
+    const nameBuffer = Buffer.from(name, 'utf8');
+    const symbolBuffer = Buffer.from(symbol, 'utf8');
+    const uriBuffer = Buffer.from(uri, 'utf8');
+    
+    // Create the data buffer
+    const data = Buffer.alloc(4 + nameBuffer.length + 4 + symbolBuffer.length + 4 + uriBuffer.length + 50); // extra space for other fields
+    let offset = 0;
+    
+    // DataV2 fields
+    // name (String)
+    data.writeUInt32LE(nameBuffer.length, offset);
+    offset += 4;
+    nameBuffer.copy(data, offset);
+    offset += nameBuffer.length;
+    
+    // symbol (String) 
+    data.writeUInt32LE(symbolBuffer.length, offset);
+    offset += 4;
+    symbolBuffer.copy(data, offset);
+    offset += symbolBuffer.length;
+    
+    // uri (String)
+    data.writeUInt32LE(uriBuffer.length, offset);
+    offset += 4;
+    uriBuffer.copy(data, offset);
+    offset += uriBuffer.length;
+    
+    // seller_fee_basis_points (u16)
+    data.writeUInt16LE(0, offset);
+    offset += 2;
+    
+    // creators (Option<Vec<Creator>>) - None
+    data.writeUInt8(0, offset); // None
+    offset += 1;
+    
+    // collection (Option<Collection>) - None
+    data.writeUInt8(0, offset); // None
+    offset += 1;
+    
+    // uses (Option<Uses>) - None
+    data.writeUInt8(0, offset); // None
+    offset += 1;
+    
+    // Additional parameters for CreateMetadataAccountV3
+    // is_mutable (bool)
+    data.writeUInt8(1, offset); // true
+    offset += 1;
+    
+    // update_authority_is_signer (bool)
+    data.writeUInt8(1, offset); // true
+    offset += 1;
+    
+    // collection_details (Option<CollectionDetails>) - None
+    data.writeUInt8(0, offset); // None
+    offset += 1;
+    
+    return Buffer.concat([discriminator, data.slice(0, offset)]);
+  }
+
+  /**
    * Serialize launch data for storage
    */
   private serializeLaunchData(data: LaunchData): Buffer {
@@ -883,33 +1170,90 @@ export class LaunchpadExecutor {
         return null;
       }
 
+      console.log('🔍 Attempting to deserialize account data:');
+      console.log('  - Data length:', data.length, 'bytes');
+      console.log('  - First 16 bytes (hex):', data.slice(0, 16).toString('hex'));
+
       let offset = 8; // Skip discriminator
+      
+      // Check if we have enough data for basic structure
+      if (data.length < 8 + 32 + 32 + 4) {
+        console.warn('⚠️ Account data too short for launch state structure');
+        return null;
+      }
 
       // creator: Pubkey (32 bytes)
       const creator = new PublicKey(data.slice(offset, offset + 32));
       offset += 32;
+      console.log('  - Creator:', creator.toString());
 
       // token_mint: Pubkey (32 bytes)
       const tokenMint = new PublicKey(data.slice(offset, offset + 32));
       offset += 32;
+      console.log('  - Token mint:', tokenMint.toString());
 
       // token_name: String
+      if (offset + 4 > data.length) {
+        console.warn('⚠️ Not enough data for token_name length');
+        return null;
+      }
+      
       const tokenNameLen = data.readUInt32LE(offset);
       offset += 4;
+      
+      if (tokenNameLen > 1000 || offset + tokenNameLen > data.length) {
+        console.warn('⚠️ Invalid token_name length:', tokenNameLen);
+        return null;
+      }
+      
       const tokenName = data.slice(offset, offset + tokenNameLen).toString('utf8');
       offset += tokenNameLen;
+      console.log('  - Token name:', tokenName);
 
       // token_symbol: String
+      if (offset + 4 > data.length) {
+        console.warn('⚠️ Not enough data for token_symbol length');
+        return null;
+      }
+      
       const tokenSymbolLen = data.readUInt32LE(offset);
       offset += 4;
+      
+      if (tokenSymbolLen > 100 || offset + tokenSymbolLen > data.length) {
+        console.warn('⚠️ Invalid token_symbol length:', tokenSymbolLen);
+        return null;
+      }
+      
       const tokenSymbol = data.slice(offset, offset + tokenSymbolLen).toString('utf8');
       offset += tokenSymbolLen;
+      console.log('  - Token symbol:', tokenSymbol);
 
       // token_uri: String
+      if (offset + 4 > data.length) {
+        console.warn('⚠️ Not enough data for token_uri length');
+        return null;
+      }
+      
       const tokenUriLen = data.readUInt32LE(offset);
       offset += 4;
+      
+      if (tokenUriLen > 1000 || offset + tokenUriLen > data.length) {
+        console.warn('⚠️ Invalid token_uri length:', tokenUriLen);
+        return null;
+      }
+      
       const tokenUri = data.slice(offset, offset + tokenUriLen).toString('utf8');
       offset += tokenUriLen;
+      console.log('  - Token URI:', tokenUri);
+
+      // Verify we have enough remaining data for all the u64 and other fields
+      const remainingBytes = data.length - offset;
+      const requiredBytes = 8 * 8 + 4 + 1; // 8 u64s + 1 u32 + 1 u8
+      
+      if (remainingBytes < requiredBytes) {
+        console.warn(`⚠️ Not enough remaining data. Have: ${remainingBytes}, need: ${requiredBytes}`);
+        return null;
+      }
 
       // soft_cap: u64
       const softCap = Number(data.readBigUInt64LE(offset));
@@ -959,18 +1303,22 @@ export class LaunchpadExecutor {
       const statusValue = data[offset];
       offset += 1;
       
+      console.log('  - Status value (raw):', statusValue);
+      
       // Convert enum value to string
       let status: 'Active' | 'Successful' | 'Failed' = 'Active';
       if (statusValue === 0) status = 'Active';
       else if (statusValue === 1) status = 'Successful';
       else if (statusValue === 2) status = 'Failed';
 
-      // bump: u8
-      const bump = data[offset];
+      console.log('  - Status (converted):', status);
+
+      // bump: u8 - Skip bump value as it's not needed in the UI
+      // const bump = data[offset]; 
       offset += 1;
 
       // Construct LaunchData object
-      return {
+      const launchData = {
         creator,
         tokenMint,
         tokenName,
@@ -990,6 +1338,16 @@ export class LaunchpadExecutor {
         status,
         isFinalized: status !== 'Active',
       };
+
+      console.log('✅ Successfully deserialized launch data:', {
+        tokenName: launchData.tokenName,
+        tokenSymbol: launchData.tokenSymbol,
+        status: launchData.status,
+        creator: launchData.creator.toString(),
+        tokenMint: launchData.tokenMint.toString()
+      });
+
+      return launchData;
 
     } catch (error) {
       console.error('❌ Failed to deserialize launch data:', error);
