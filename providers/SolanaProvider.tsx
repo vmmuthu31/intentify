@@ -383,9 +383,8 @@ export function SolanaProvider({ children }: SolanaProviderProps) {
           `📋 Token ${mint.slice(0, 8)}... - Symbol: ${symbol}${metadata ? ' (from metadata)' : ' (from registry)'}`
         );
 
-        console.log('vmfthu', metadata);
         balances.push({
-          mint,
+          mint: metadata?.mint || mint,
           symbol,
           balance: rawAmount,
           uiAmount,

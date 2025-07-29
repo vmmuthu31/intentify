@@ -7,16 +7,9 @@ import {
   SystemProgram,
   LAMPORTS_PER_SOL,
   TransactionInstruction,
-  AccountInfo,
-  clusterApiUrl,
 } from '@solana/web3.js';
 import {
   TOKEN_PROGRAM_ID,
-  ASSOCIATED_TOKEN_PROGRAM_ID,
-  getAssociatedTokenAddress,
-  createAssociatedTokenAccountInstruction,
-  getMint,
-  createTransferInstruction,
 } from '@solana/spl-token';
 import { BN } from '@coral-xyz/anchor';
 import bs58 from 'bs58';
@@ -24,7 +17,7 @@ import { Buffer } from 'buffer';
 import * as Linking from 'expo-linking';
 import nacl from 'tweetnacl';
 import { encryptPayload } from '../utils/encryptPayload';
-import { decryptPayload } from '../utils/decryptPayload';
+import { getTokenMetadataService } from '../services/token-metadata-service';
 
 global.Buffer = global.Buffer || Buffer;
 
@@ -46,7 +39,6 @@ export const DEVNET_TOKENS = {
 };
 
 // Phantom wallet integration constants
-const NETWORK = clusterApiUrl("devnet");
 const useUniversalLinks = true;
 
 const buildUrl = (path: string, params: URLSearchParams) =>
@@ -110,8 +102,8 @@ export class IntentExecutor {
       }
 
       // 1. Convert string mints to PublicKeys
-      const fromMint = this.getMintPublicKey(params.fromMint);
-      const toMint = this.getMintPublicKey(params.toMint);
+      const fromMint = await this.getMintPublicKey(params.fromMint);
+      const toMint = await this.getMintPublicKey(params.toMint);
 
       // 2. Rugproof check if enabled
       if (params.rugproofEnabled) {
@@ -163,7 +155,7 @@ export class IntentExecutor {
   }
 
   /**
-   * Create a real swap transaction with protocol fee collection
+   * Create a real swap transaction using the devnet contract
    */
   private async createRealSwapTransaction(params: {
     fromMint: PublicKey;
@@ -179,53 +171,100 @@ export class IntentExecutor {
     const { blockhash } = await this.connection.getLatestBlockhash('confirmed');
     transaction.recentBlockhash = blockhash;
 
-    // 1. For now, we'll skip token account creation to simplify the transaction
-    // In production, this would handle token account creation and management
-    console.log('📝 Skipping token account creation for simplified demo transaction');
+    console.log('🏗️ Creating REAL swap transaction using your devnet contract...');
+    console.log('📋 Contract Program ID:', DEVNET_INTENTFI_PROGRAM_ID.toString());
+    console.log('📋 From:', params.fromMint.toString());
+    console.log('📋 To:', params.toMint.toString());
+    console.log('📋 Amount:', params.amount, 'lamports');
+    console.log('📋 Max Slippage:', params.maxSlippage, 'bps');
 
-    // 4. Add protocol fee collection (simplified to SOL transfer for now)
-    if (params.protocolFee > 0) {
-      // For now, collect protocol fee as SOL transfer
-      // In production, this would handle different token types
-      transaction.add(
-        SystemProgram.transfer({
-          fromPubkey: this.userPublicKey,
-          toPubkey: INTENTFI_TREASURY,
-          lamports: params.protocolFee,
-        })
-      );
-      console.log('📝 Added protocol fee collection:', params.protocolFee, 'lamports');
-    }
+    // Check if contract is ready for real operations
+    const readiness = await this.checkContractReadiness();
+    
+    if (!readiness.protocolInitialized || !readiness.userAccountExists) {
+      console.log('⚠️ Contract not ready for real swaps:', readiness.errors);
+      console.log('💡 Use the scripts/initialize-protocol.ts to set up the contract');
+      console.log('💡 Use the scripts/test-user-init.ts to create your user account');
+      console.log('🔄 Falling back to demo transaction for now...');
+      
+      // Fallback to demo transaction
+      if (params.protocolFee > 0) {
+        transaction.add(
+          SystemProgram.transfer({
+            fromPubkey: this.userPublicKey,
+            toPubkey: INTENTFI_TREASURY,
+            lamports: params.protocolFee,
+          })
+        );
+        console.log('📝 Added protocol fee collection:', params.protocolFee, 'lamports');
+      }
 
-    // 5. Add swap instruction (simplified - using a basic transfer for now)
-    // In production, this would be a Jupiter swap instruction
-    // For now, we'll create a simple SOL transfer to demonstrate the flow
-    if (params.fromMint.equals(DEVNET_TOKENS.SOL)) {
-      // Simple SOL transfer as a placeholder for the actual swap
-      const transferInstruction = SystemProgram.transfer({
+      const demoInstruction = SystemProgram.transfer({
         fromPubkey: this.userPublicKey,
         toPubkey: this.userPublicKey, // Self-transfer for demo
-        lamports: Math.floor((params.amount - params.protocolFee) * 0.1), // Small demo amount
+        lamports: Math.floor((params.amount - params.protocolFee) * 0.01), // 1% of amount for demo
       });
       
-      transaction.add(transferInstruction);
-      console.log('📝 Added demo SOL transfer instruction');
-    } else {
-      // For other tokens, create a mock instruction with minimal data
-      const mockSwapInstruction = new TransactionInstruction({
-        programId: SystemProgram.programId, // Use system program for safety
-        keys: [
-          { pubkey: this.userPublicKey, isSigner: true, isWritable: true },
-        ],
-        data: Buffer.from([0]), // Minimal data to avoid buffer issues
-      });
+      transaction.add(demoInstruction);
+      console.log('📝 Added demo transfer instruction');
+      console.log('🎯 Demo transaction created (contract not ready)');
       
-      transaction.add(mockSwapInstruction);
-      console.log('📝 Added mock swap instruction');
+      return transaction;
     }
 
-    console.log('📝 Created swap transaction with protocol fee collection');
-    return transaction;
+    try {
+      console.log('🔄 Step 1: Creating swap intent in contract...');
+      const createIntentInstruction = await this.createSwapIntentInstruction({
+        fromMint: params.fromMint,
+        toMint: params.toMint,
+        amount: params.amount,
+        maxSlippage: params.maxSlippage,
+      });
+      
+      transaction.add(createIntentInstruction);
+      console.log('✅ Added create_swap_intent instruction to transaction');
+
+      // Note: Cannot execute in same transaction because create uses 'init' for intent account
+      // The intent will be created and can be executed in a separate transaction
+      console.log('📝 Intent will be created on-chain. You can execute it separately if needed.');
+      console.log('🎯 Real contract swap intent transaction created!');
+
+      console.log('🎯 Real contract swap transaction created!');
+      console.log('📦 Total instructions:', transaction.instructions.length);
+      console.log('🎉 Your devnet contract will create a real swap intent on-chain!');
+      
+      return transaction;
+
+    } catch (error) {
+      console.error('❌ Failed to create contract swap transaction:', error);
+      console.log('� Falling back to demo transaction...');
+      
+      // Clear any partial instructions
+      transaction.instructions = [];
+      
+      // Fallback to demo transaction
+      if (params.protocolFee > 0) {
+        transaction.add(
+          SystemProgram.transfer({
+            fromPubkey: this.userPublicKey,
+            toPubkey: INTENTFI_TREASURY,
+            lamports: params.protocolFee,
+          })
+        );
+        console.log('📝 Added protocol fee collection:', params.protocolFee, 'lamports');
+      }
+
+      const demoInstruction = SystemProgram.transfer({
+        fromPubkey: this.userPublicKey,
+        toPubkey: this.userPublicKey,
+        lamports: Math.floor((params.amount - params.protocolFee) * 0.01),
+      });
+      
+      transaction.add(demoInstruction);
+      console.log('📝 Added demo transfer instruction (error fallback)');
+      
+      return transaction;
+    }
   }
 
   /**
@@ -346,11 +385,12 @@ export class IntentExecutor {
 
   /**
    * Get mint PublicKey from string identifier
+   * Only resolves tokens that the user actually holds in their wallet
    */
-  private getMintPublicKey(mintStr: string): PublicKey {
+  private async getMintPublicKey(mintStr: string): Promise<PublicKey> {
     console.log(`🔍 Converting token string to PublicKey: ${mintStr}`);
     
-    // Handle common token symbols
+    // Handle common token symbols first (keep for quick access)
     switch (mintStr.toUpperCase()) {
       case 'SOL':
         console.log(`✅ Using SOL mint: ${DEVNET_TOKENS.SOL.toString()}`);
@@ -368,17 +408,267 @@ export class IntentExecutor {
         console.log(`✅ Using RAY mint: ${DEVNET_TOKENS.RAY.toString()}`);
         return DEVNET_TOKENS.RAY;
       default:
-        // Try to parse as PublicKey string
+        // Try to parse as PublicKey string first
         try {
           const pubkey = new PublicKey(mintStr);
           console.log(`✅ Parsed as PublicKey: ${pubkey.toString()}`);
+          
+          // Verify the user actually holds this token
+          const hasToken = await this.verifyUserHoldsToken(pubkey);
+          if (!hasToken) {
+            throw new Error(`You don't hold any ${mintStr} tokens in your wallet`);
+          }
+          
           return pubkey;
         } catch {
-          console.error(`❌ Unknown token: ${mintStr}`);
-          throw new Error(`Unknown token: ${mintStr}`);
+          // If not a valid PublicKey, try to resolve from user's wallet balances only
+          console.log(`🔍 Searching for ${mintStr} in your wallet...`);
+          
+          try {
+            const mintFromBalance = await this.getMintFromTokenBalances(mintStr);
+            if (mintFromBalance) {
+              console.log(`✅ Found ${mintStr} in wallet balances: ${mintFromBalance.toString()}`);
+              return mintFromBalance;
+            }
+          } catch (error) {
+            console.warn(`⚠️ Failed to get token from wallet balances:`, error);
+          }
+          
+          console.error(`❌ Token ${mintStr} not found in your wallet`);
+          throw new Error(`Token "${mintStr}" not found in your wallet. You can only swap tokens you currently hold.`);
         }
     }
   }
+
+  /**
+   * Verify that the user holds a specific token in their wallet
+   */
+  private async verifyUserHoldsToken(mintAddress: PublicKey): Promise<boolean> {
+    try {
+      console.log(`🔍 Verifying user holds token: ${mintAddress.toString()}`);
+      
+      // Get all token accounts for the user
+      const tokenAccounts = await this.connection.getParsedTokenAccountsByOwner(
+        this.userPublicKey,
+        {
+          mint: mintAddress,
+        }
+      );
+
+      // Check if user has any balance for this token
+      for (const tokenAccount of tokenAccounts.value) {
+        const accountData = tokenAccount.account.data.parsed;
+        const balance = accountData.info.tokenAmount.uiAmount;
+        
+        if (balance && balance > 0) {
+          console.log(`✅ User holds ${balance} of token ${mintAddress.toString()}`);
+          return true;
+        }
+      }
+
+      console.log(`❌ User does not hold token ${mintAddress.toString()}`);
+      return false;
+    } catch (error) {
+      console.error(`Failed to verify token holdings for ${mintAddress.toString()}:`, error);
+      return false;
+    }
+  }
+
+  /**
+   * Get mint address from user's token balances by symbol
+   * This is the primary method for resolving tokens since we only swap held tokens
+   */
+  private async getMintFromTokenBalances(symbol: string): Promise<PublicKey | null> {
+    try {
+      console.log(`🔍 Searching for ${symbol} in wallet token balances...`);
+      
+      // Get all token accounts for the user
+      const tokenAccounts = await this.connection.getParsedTokenAccountsByOwner(
+        this.userPublicKey,
+        {
+          programId: TOKEN_PROGRAM_ID,
+        }
+      );
+
+      console.log(`📊 Found ${tokenAccounts.value.length} token accounts in wallet`);
+
+      if (tokenAccounts.value.length === 0) {
+        console.log(`❌ No token accounts found`);
+        return null;
+      }
+
+      // Get metadata service and fetch all metadata in parallel (same as SolanaProvider)
+      const metadataService = getTokenMetadataService(this.connection);
+      const mintList = tokenAccounts.value.map(({ account }) => account.data.parsed.info.mint);
+      
+      console.log('🔍 Fetching metadata for', mintList.length, 'tokens...');
+      const metadataPromises = mintList.map((mint) => metadataService.fetchTokenMetadata(mint));
+      const metadataResults = await Promise.allSettled(metadataPromises);
+
+      // Create metadata map
+      const metadataMap = new Map<string, any>();
+      metadataResults.forEach((result, index) => {
+        if (result.status === 'fulfilled' && result.value) {
+          metadataMap.set(mintList[index], result.value);
+        }
+      });
+
+      // For each token account, try to match by symbol
+      for (const tokenAccount of tokenAccounts.value) {
+        const accountData = tokenAccount.account.data.parsed;
+        const mintAddress = accountData.info.mint;
+        const balance = accountData.info.tokenAmount.uiAmount;
+
+        // Only consider tokens with positive balance
+        if (balance && balance > 0) {
+          const metadata = metadataMap.get(mintAddress);
+          const tokenSymbol = metadata?.symbol;
+          
+          console.log(`📋 Token ${mintAddress.slice(0, 8)}... - Symbol: ${tokenSymbol || 'UNKNOWN'}${metadata ? ' (from metadata)' : ' (no metadata)'} - Balance: ${balance}`);
+          
+          if (tokenSymbol && tokenSymbol.toUpperCase() === symbol.toUpperCase()) {
+            console.log(`✅ Found ${symbol} in wallet: ${mintAddress} (balance: ${balance})`);
+            return new PublicKey(mintAddress);
+          }
+        }
+      }
+
+      console.log(`❌ Token ${symbol} not found in wallet balances or balance is zero`);
+      return null;
+    } catch (error) {
+      console.error(`Failed to get token balances:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Get token symbol from mint address using metadata service
+   * Uses the same approach as SolanaProvider for consistency
+   */
+  private async getTokenSymbolFromMint(mintAddress: string): Promise<string | null> {
+    try {
+      console.log(`🔍 Fetching metadata for mint: ${mintAddress.slice(0, 8)}...`);
+      
+      // First check hardcoded known tokens for performance
+      const knownTokens: { [mint: string]: string } = {
+        [DEVNET_TOKENS.SOL.toString()]: 'SOL',
+        [DEVNET_TOKENS.USDC.toString()]: 'USDC',
+        [DEVNET_TOKENS.USDT.toString()]: 'USDT',
+        [DEVNET_TOKENS.BONK.toString()]: 'BONK',
+        [DEVNET_TOKENS.RAY.toString()]: 'RAY',
+      };
+
+      if (knownTokens[mintAddress]) {
+        console.log(`✅ Found known token: ${knownTokens[mintAddress]}`);
+        return knownTokens[mintAddress];
+      }
+
+      // Use token metadata service for unknown tokens
+      const metadataService = getTokenMetadataService(this.connection);
+      const metadata = await metadataService.fetchTokenMetadata(mintAddress);
+      
+      if (metadata?.symbol) {
+        console.log(`✅ Fetched metadata symbol: ${metadata.symbol} for mint ${mintAddress.slice(0, 8)}...`);
+        return metadata.symbol;
+      }
+
+      console.log(`❌ No metadata found for mint ${mintAddress.slice(0, 8)}...`);
+      return null;
+    } catch (error) {
+      console.error(`Failed to get token symbol for mint ${mintAddress}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Get all tokens the user currently holds in their wallet
+   * Useful for populating swap UI with available tokens
+   */
+  async getUserHeldTokens(): Promise<{
+    mint: string;
+    symbol: string | null;
+    balance: number;
+    decimals: number;
+  }[]> {
+    try {
+      console.log('📋 Getting all tokens held by user...');
+      
+      // Get all token accounts for the user
+      const tokenAccounts = await this.connection.getParsedTokenAccountsByOwner(
+        this.userPublicKey,
+        {
+          programId: TOKEN_PROGRAM_ID,
+        }
+      );
+
+      const heldTokens: {
+        mint: string;
+        symbol: string | null;
+        balance: number;
+        decimals: number;
+      }[] = [];
+
+      // Get metadata service
+      const metadataService = getTokenMetadataService(this.connection);
+
+      // Fetch metadata for all tokens in parallel
+      const mintList = tokenAccounts.value.map(({ account }) => account.data.parsed.info.mint);
+      console.log('🔍 Fetching metadata for', mintList.length, 'tokens...');
+      
+      const metadataPromises = mintList.map((mint) => metadataService.fetchTokenMetadata(mint));
+      const metadataResults = await Promise.allSettled(metadataPromises);
+
+      // Create metadata map
+      const metadataMap = new Map<string, any>();
+      metadataResults.forEach((result, index) => {
+        if (result.status === 'fulfilled' && result.value) {
+          metadataMap.set(mintList[index], result.value);
+        }
+      });
+
+      // Process each token account
+      for (const tokenAccount of tokenAccounts.value) {
+        const accountData = tokenAccount.account.data.parsed;
+        const mintAddress = accountData.info.mint;
+        const balance = accountData.info.tokenAmount.uiAmount;
+        const decimals = accountData.info.tokenAmount.decimals;
+
+        // Only include tokens with positive balance
+        if (balance && balance > 0) {
+          const metadata = metadataMap.get(mintAddress);
+          const symbol = metadata?.symbol || 'UNKNOWN';
+          
+          console.log(`📋 Token ${mintAddress.slice(0, 8)}... - Symbol: ${symbol}${metadata ? ' (from metadata)' : ' (unknown)'}`);
+          
+          heldTokens.push({
+            mint: mintAddress,
+            symbol: symbol,
+            balance: balance,
+            decimals: decimals,
+          });
+        }
+      }
+
+      // Always include SOL (native token)
+      const solBalance = await this.connection.getBalance(this.userPublicKey);
+      if (solBalance > 0) {
+        heldTokens.unshift({
+          mint: DEVNET_TOKENS.SOL.toString(),
+          symbol: 'SOL',
+          balance: solBalance / LAMPORTS_PER_SOL,
+          decimals: 9,
+        });
+      }
+
+      console.log(`✅ Found ${heldTokens.length} tokens held by user`);
+      return heldTokens;
+    } catch (error) {
+      console.error('Failed to get user held tokens:', error);
+      return [];
+    }
+  }
+
+ 
 
   /**
    * Get protocol state PDA
@@ -401,14 +691,16 @@ export class IntentExecutor {
   }
 
   /**
-   * Get intent account PDA
+   * Get intent account PDA using the correct seeds format
    */
-  private async getIntentAccountPDA(intentNumber: number): Promise<[PublicKey, number]> {
+  private async getIntentAccountPDA(nextIntentNumber: number): Promise<[PublicKey, number]> {
+    // Contract expects: [b"intent", authority.key().as_ref(), &(user_account.total_intents_created + 1).to_le_bytes()]
+    // where total_intents_created is u64, so to_le_bytes() produces 8 bytes
     return PublicKey.findProgramAddressSync(
       [
         Buffer.from('intent'),
         this.userPublicKey.toBuffer(),
-        new BN(intentNumber).toArrayLike(Buffer, 'le', 8),
+        new BN(nextIntentNumber).toArrayLike(Buffer, 'le', 8),
       ],
       DEVNET_INTENTFI_PROGRAM_ID
     );
@@ -417,7 +709,7 @@ export class IntentExecutor {
   /**
    * Get user account info from the blockchain
    */
-  private async getUserAccountInfo(): Promise<any | null> {
+  private async getUserAccountInfo(): Promise<{ totalIntentsCreated: number } | null> {
     try {
       const [userAccountPDA] = await this.getUserAccountPDA();
       const accountInfo = await this.connection.getAccountInfo(userAccountPDA);
@@ -426,9 +718,12 @@ export class IntentExecutor {
         return null;
       }
 
-      // Parse account data (simplified - in real implementation, use Anchor deserialization)
-      // For now, assume totalIntentsCreated is at byte offset 40 (after pubkey + active_intents)
-      const totalIntentsCreated = new BN(accountInfo.data.slice(40, 48), 'le').toNumber();
+      // Parse account data properly using Anchor layout
+      // UserAccount layout: authority(32) + active_intents(1) + total_intents_created(8) + total_volume(8) + rugproof_enabled(1) + bump(1)
+      // So total_intents_created is at byte offset 33 (32 + 1)
+      const totalIntentsCreated = new BN(accountInfo.data.slice(33, 41), 'le').toNumber();
+      
+      console.log(`📊 User account - Total intents created: ${totalIntentsCreated}`);
       
       return {
         totalIntentsCreated,
@@ -436,6 +731,185 @@ export class IntentExecutor {
     } catch (error) {
       console.error('Failed to get user account info:', error);
       return null;
+    }
+  }
+
+  /**
+   * Create a swap intent instruction for the devnet contract
+   */
+  private async createSwapIntentInstruction(params: {
+    fromMint: PublicKey;
+    toMint: PublicKey;
+    amount: number;
+    maxSlippage: number;
+  }): Promise<TransactionInstruction> {
+    try {
+      console.log('🔧 Creating swap intent instruction for devnet contract...');
+      
+      // Get required PDAs
+      const [protocolStatePDA] = await this.getProtocolStatePDA();
+      const [userAccountPDA] = await this.getUserAccountPDA();
+      
+      // Get current user account to determine next intent number
+      const userAccountInfo = await this.getUserAccountInfo();
+      if (!userAccountInfo) {
+        throw new Error('User account not initialized. Please initialize your account first.');
+      }
+      
+      // The contract expects (total_intents_created + 1) as the seed
+      const nextIntentNumber = userAccountInfo.totalIntentsCreated + 1;
+      const [intentAccountPDA] = await this.getIntentAccountPDA(nextIntentNumber);
+
+      console.log('� Contract PDAs:');
+      console.log('  Protocol State PDA:', protocolStatePDA.toString());
+      console.log('  User Account PDA:', userAccountPDA.toString());
+      console.log('  Intent Account PDA:', intentAccountPDA.toString());
+      console.log('  Next Intent Number:', nextIntentNumber);
+
+      // Create instruction data using the proper encoding method
+      const instructionData = this.encodeCreateSwapIntentData(params);
+
+      console.log('📦 Instruction data created:', {
+        fromMint: params.fromMint.toString(),
+        toMint: params.toMint.toString(),
+        amount: params.amount,
+        maxSlippage: params.maxSlippage,
+        dataLength: instructionData.length,
+      });
+
+      // Create the instruction according to CreateSwapIntent context
+      const instruction = new TransactionInstruction({
+        programId: DEVNET_INTENTFI_PROGRAM_ID,
+        keys: [
+          { pubkey: this.userPublicKey, isSigner: true, isWritable: true },    // authority (signer, payer)
+          { pubkey: protocolStatePDA, isSigner: false, isWritable: true },     // protocol_state
+          { pubkey: userAccountPDA, isSigner: false, isWritable: true },       // user_account  
+          { pubkey: intentAccountPDA, isSigner: false, isWritable: true },     // intent_account (will be created)
+          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // system_program
+        ],
+        data: instructionData,
+      });
+
+      console.log('✅ Create swap intent instruction created successfully');
+      console.log('📋 Keys count:', instruction.keys.length);
+      console.log('📋 Program ID:', instruction.programId.toString());
+      
+      return instruction;
+
+    } catch (error) {
+      console.error('❌ Failed to create swap intent instruction:', error);
+      throw new Error(`Failed to create swap intent instruction: ${error}`);
+    }
+  }
+
+  /**
+   * Check if the devnet contract is properly initialized and user account exists
+   */
+  private async checkContractReadiness(): Promise<{ 
+    protocolInitialized: boolean; 
+    userAccountExists: boolean; 
+    errors: string[] 
+  }> {
+    const errors: string[] = [];
+    let protocolInitialized = false;
+    let userAccountExists = false;
+
+    try {
+      console.log('🔍 Checking devnet contract readiness...');
+      
+      // Check if protocol state exists
+      const [protocolStatePDA] = await this.getProtocolStatePDA();
+      const protocolAccount = await this.connection.getAccountInfo(protocolStatePDA);
+      
+      if (protocolAccount) {
+        protocolInitialized = true;
+        console.log('✅ Protocol state initialized');
+      } else {
+        errors.push('Protocol state not initialized');
+        console.log('❌ Protocol state not found at:', protocolStatePDA.toString());
+      }
+
+      // Check if user account exists
+      const [userAccountPDA] = await this.getUserAccountPDA();
+      const userAccount = await this.connection.getAccountInfo(userAccountPDA);
+      
+      if (userAccount) {
+        userAccountExists = true;
+        console.log('✅ User account exists');
+      } else {
+        errors.push('User account not initialized');
+        console.log('❌ User account not found at:', userAccountPDA.toString());
+      }
+
+    } catch (error) {
+      const errorMsg = `Contract readiness check failed: ${error}`;
+      errors.push(errorMsg);
+      console.error('❌', errorMsg);
+    }
+
+    return { protocolInitialized, userAccountExists, errors };
+  }
+
+  /**
+   * Create an execute swap instruction for the devnet contract
+   */
+  private async createExecuteSwapInstruction(params: {
+    expectedOutput: number;
+  }): Promise<TransactionInstruction> {
+    try {
+      console.log('🔧 Creating execute swap intent instruction...');
+      
+      // Get PDAs
+      const [protocolStatePDA] = await this.getProtocolStatePDA();
+      const [userAccountPDA] = await this.getUserAccountPDA();
+      
+      // Get the latest intent account (just created)
+      const userAccountInfo = await this.getUserAccountInfo();
+      if (!userAccountInfo) {
+        throw new Error('User account not found');
+      }
+      
+      const intentNumber = userAccountInfo.totalIntentsCreated + 1;
+      const [intentAccountPDA] = await this.getIntentAccountPDA(intentNumber);
+
+      console.log('� Execute swap PDAs:');
+      console.log('  Intent Account:', intentAccountPDA.toString());
+      console.log('  Expected Output:', params.expectedOutput);
+
+      // For now, we'll use the user's public key as mock token accounts
+      // In a real implementation, you'd get the actual associated token accounts
+      const mockTokenAccount = this.userPublicKey; // Simplified for demo
+
+      // Create instruction data using the proper encoding method
+      const instructionData = this.encodeExecuteSwapIntentData(params);
+
+      console.log('📦 Execute instruction data created:', {
+        expectedOutput: params.expectedOutput,
+        dataLength: instructionData.length,
+      });
+
+      // Create the instruction according to ExecuteSwapIntent context
+      const instruction = new TransactionInstruction({
+        programId: DEVNET_INTENTFI_PROGRAM_ID,
+        keys: [
+          { pubkey: this.userPublicKey, isSigner: true, isWritable: true },    // user (signer)
+          { pubkey: intentAccountPDA, isSigner: false, isWritable: true },     // intent_account
+          { pubkey: protocolStatePDA, isSigner: false, isWritable: true },     // protocol_state
+          { pubkey: userAccountPDA, isSigner: false, isWritable: true },       // user_account
+          { pubkey: mockTokenAccount, isSigner: false, isWritable: true },     // user_source_token
+          { pubkey: mockTokenAccount, isSigner: false, isWritable: true },     // user_destination_token
+          { pubkey: INTENTFI_TREASURY, isSigner: false, isWritable: true },    // treasury_fee_account
+          { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },    // token_program
+        ],
+        data: instructionData,
+      });
+
+      console.log('✅ Execute swap intent instruction created');
+      return instruction;
+
+    } catch (error) {
+      console.error('❌ Failed to create execute swap instruction:', error);
+      throw new Error(`Failed to create execute swap instruction: ${error}`);
     }
   }
 
@@ -448,8 +922,11 @@ export class IntentExecutor {
     amount: number;
     maxSlippage: number;
   }): Buffer {
+    // Anchor discriminator for "create_swap_intent" is first 8 bytes of sha256("global:create_swap_intent")
+    const discriminator = Buffer.from([244, 174, 198, 206, 184, 218, 159, 231]);
+    
     return Buffer.concat([
-      Buffer.from([2]), // create_swap_intent instruction discriminator
+      discriminator, // 8-byte Anchor discriminator
       params.fromMint.toBuffer(),
       params.toMint.toBuffer(),
       new BN(params.amount).toArrayLike(Buffer, 'le', 8),
@@ -463,25 +940,15 @@ export class IntentExecutor {
   private encodeExecuteSwapIntentData(params: {
     expectedOutput: number;
   }): Buffer {
+    // Anchor discriminator for "execute_swap_intent" is first 8 bytes of sha256("global:execute_swap_intent")
+    const discriminator = Buffer.from([7, 166, 128, 173, 169, 23, 243, 92]);
+    
     return Buffer.concat([
-      Buffer.from([4]), // execute_swap_intent instruction discriminator
+      discriminator, // 8-byte Anchor discriminator
       new BN(params.expectedOutput).toArrayLike(Buffer, 'le', 8),
     ]);
   }
 
-  /**
-   * Encode swap instruction data
-   */
-  private encodeSwapInstructionData(params: {
-    amount: number;
-    maxSlippage: number;
-  }): Buffer {
-    return Buffer.concat([
-      Buffer.from([3]), // swap instruction discriminator
-      new BN(params.amount).toArrayLike(Buffer, 'le', 8),
-      new BN(params.maxSlippage).toArrayLike(Buffer, 'le', 2),
-    ]);
-  }
 
   /**
    * Encode lending instruction data
@@ -534,11 +1001,14 @@ export class IntentExecutor {
       // 2. Calculate protocol fee
       const amountInLamports = Math.floor(params.amount * LAMPORTS_PER_SOL);
       const protocolFee = Math.floor(amountInLamports * PROTOCOL_FEE_RATE);
-      const netAmount = amountInLamports - protocolFee;
+
+      console.log(`💰 Amount: ${params.amount} tokens (${amountInLamports} lamports)`);
+      console.log(`💸 Protocol fee: ${protocolFee} lamports (0.3%)`);
+      console.log(`💎 Net amount: ${amountInLamports - protocolFee} lamports`);
 
       // 3. Create lending transaction
       const transaction = await this.createLendingTransaction({
-        mint: this.getMintPublicKey(params.mint),
+        mint: await this.getMintPublicKey(params.mint),
         amount: amountInLamports,
         protocolFee,
         protocol: bestProtocol.name,
@@ -577,11 +1047,14 @@ export class IntentExecutor {
 
       // 2. Calculate protocol fee
       const protocolFee = Math.floor(params.usdcAmount * PROTOCOL_FEE_RATE);
-      const netAmount = params.usdcAmount - protocolFee;
+
+      console.log(`💰 USDC Amount: ${params.usdcAmount}`);
+      console.log(`💸 Protocol fee: ${protocolFee} USDC (0.3%)`);
+      console.log(`💎 Net amount: ${params.usdcAmount - protocolFee} USDC`);
 
       // 3. Create buy transaction
       const transaction = await this.createBuyTransaction({
-        mint: this.getMintPublicKey(params.mint),
+        mint: await this.getMintPublicKey(params.mint),
         usdcAmount: params.usdcAmount,
         protocolFee,
         maxPriceImpact: params.maxPriceImpact,
@@ -605,7 +1078,7 @@ export class IntentExecutor {
   private async performRugproofCheck(mint: string): Promise<{
     score: number;
     reason?: string;
-    checks: Array<{ name: string; status: 'pass' | 'fail' | 'warning' }>;
+    checks: { name: string; status: 'pass' | 'fail' | 'warning' }[];
   }> {
     // Mock rugproof analysis
     const checks = [
