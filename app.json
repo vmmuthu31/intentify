@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "IntentFI",
-    "slug": "intentfi-mobile",
+    "name": "IntentiFI",
+    "slug": "intentifi-mobile",
     "version": "1.0.0",
     "web": {
       "favicon": "./assets/favicon.png"

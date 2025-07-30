@@ -55,7 +55,7 @@ export function WalletOnboardingScreen({ onComplete }: WalletOnboardingScreenPro
         <Image source={require('../assets/logo.png')} className="h-12 w-12" resizeMode="contain" />
 
         <Text className="mb-3 mt-6 text-center text-3xl font-bold text-white">
-          Welcome to IntentFI
+          Welcome to IntentiFI
         </Text>
         <Text className="text-center text-base leading-6 text-dark-gray">
           The first mobile intent-based DeFi superapp with rugproof protection
@@ -64,7 +64,7 @@ export function WalletOnboardingScreen({ onComplete }: WalletOnboardingScreenPro
 
       {/* Features - Changed from SlideInRight to FadeIn for more reliable animation */}
       <Animated.View entering={FadeIn.duration(800).delay(300)} className="px-6 py-4">
-        <Text className="mb-4 text-xl font-semibold text-white">What makes IntentFI special?</Text>
+        <Text className="mb-4 text-xl font-semibold text-white">What makes IntentiFI special?</Text>
 
         <View className="space-y-4">
           <Animated.View
