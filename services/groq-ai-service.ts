@@ -1,11 +1,10 @@
 /**
- * Enhanced Groq AI Service using Groq Node SDK
- *
+ * Enhanced Groq AI Service with Intent API Integration
  */
 
 import Groq from 'groq-sdk';
-import { IntentToken } from './intent-api-service';
-import { TurnkeyTokenBalance } from './turnkey-solana-service';
+import { IntentToken, intentApiService } from './intent-api-service';
+import { TurnkeyTokenBalance, turnkeySolanaService } from './turnkey-solana-service';
 import { GROQ_API_KEY } from '@env';
 
 const groq = new Groq({
@@ -34,17 +33,24 @@ export interface PortfolioAnalysis {
   insights?: string[];
 }
 
-class GroqAIService {
-  private static instance: GroqAIService;
+export interface SwapExecutionResult {
+  success: boolean;
+  message: string;
+  data?: any;
+  error?: string;
+}
+
+class EnhancedGroqAIService {
+  private static instance: EnhancedGroqAIService;
   private conversationHistory: Array<{ role: string; content: string }> = [];
 
   private constructor() {}
 
-  public static getInstance(): GroqAIService {
-    if (!GroqAIService.instance) {
-      GroqAIService.instance = new GroqAIService();
+  public static getInstance(): EnhancedGroqAIService {
+    if (!EnhancedGroqAIService.instance) {
+      EnhancedGroqAIService.instance = new EnhancedGroqAIService();
     }
-    return GroqAIService.instance;
+    return EnhancedGroqAIService.instance;
   }
 
   private getSystemPrompt(): string {
@@ -52,7 +58,7 @@ class GroqAIService {
 
 CORE RULES:
 1. NEVER make up or mock data - only use real information provided
-2. NEVER execute actions - only analyze and suggest
+2. PRIORITIZE SWAP ACTIONS - if user mentions swap with tokens, always return action: "swap"
 3. Be honest about limitations and uncertainties
 4. Provide clear, actionable responses with proper markdown formatting
 5. Always validate token symbols against provided lists
@@ -75,6 +81,57 @@ RESPONSE FORMAT:
   }
 
   /**
+   * Parse user input and execute swap if intent is clear
+   */
+  async parseAndExecuteSwapIntent(
+    userInput: string,
+    userTokens: TurnkeyTokenBalance[],
+    availableTokens: IntentToken[]
+  ): Promise<{
+    intent: SwapIntent;
+    executionResult?: SwapExecutionResult;
+  }> {
+    try {
+      // Parse the intent first
+      const intent = await this.parseSwapIntent(userInput, userTokens, availableTokens);
+
+      console.log('🤖 Parsed intent:', intent);
+
+      // If it's a clear swap intent with all required info, execute it immediately
+      if (
+        intent.action === 'swap' &&
+        intent.fromToken &&
+        intent.toToken &&
+        intent.amount &&
+        intent.confidence >= 0.8
+      ) {
+        console.log('🚀 Executing swap immediately:', intent);
+
+        const executionResult = await this.executeSwapIntent(
+          intent.fromToken,
+          intent.toToken,
+          intent.amount,
+          availableTokens
+        );
+
+        return {
+          intent,
+          executionResult,
+        };
+      }
+
+      // Otherwise, just return the intent for further processing
+      return { intent };
+    } catch (error) {
+      console.error('❌ Error in parseAndExecuteSwapIntent:', error);
+
+      // Return fallback intent
+      const fallbackIntent = this.fallbackParseIntent(userInput, userTokens, availableTokens);
+      return { intent: fallbackIntent };
+    }
+  }
+
+  /**
    * Parse user input to extract swap intent
    */
   async parseSwapIntent(
@@ -83,6 +140,15 @@ RESPONSE FORMAT:
     availableTokens: IntentToken[]
   ): Promise<SwapIntent> {
     try {
+      // First try fallback parsing for immediate results
+      const fallbackResult = this.fallbackParseIntent(userInput, userTokens, availableTokens);
+
+      // If fallback found a clear swap intent, use it immediately
+      if (fallbackResult.action === 'swap' && fallbackResult.confidence >= 0.7) {
+        console.log('🚀 Using fallback parsing for immediate swap:', fallbackResult);
+        return fallbackResult;
+      }
+
       // Filter and format user tokens
       const userTokensWithBalance = userTokens
         .filter((t) => t.uiAmount > 0)
@@ -97,19 +163,21 @@ RESPONSE FORMAT:
       const prompt = `CONTEXT:
 User's tokens with balances:
 ${userTokensWithBalance || 'No tokens with balance found'}
+SOL: Always available for swapping
 
-Available tokens for swapping: ${availableTokenSymbols}
+Available tokens for swapping: ${availableTokenSymbols}, SOL
 
 USER MESSAGE: "${userInput}"
 
 TASK: Analyze the user's intent and respond with JSON.
 
 ANALYSIS RULES:
-1. Only suggest fromToken if user actually owns it (check balances above)
-2. Only suggest toToken from available tokens list
-3. If unclear, ask for clarification rather than guessing
-4. Consider conversation context and user's actual capabilities
-5. Be specific about what information is missing
+1. If user mentions "swap", "exchange", "trade" with tokens and amounts, ALWAYS return action: "swap"
+2. SOL is always available as both fromToken and toToken
+3. Only suggest fromToken if user actually owns it (check balances above) OR if it's SOL
+4. Only suggest toToken from available tokens list OR SOL
+5. Extract exact amounts mentioned (e.g., "0.001", "1", "100")
+6. Be specific about what information is missing
 
 Required JSON format:
 {
@@ -123,11 +191,15 @@ Required JSON format:
 }
 
 CONFIDENCE SCORING:
-- 0.9+: All required info clear and valid
+- 0.9+: All required info clear and valid (action=swap, tokens identified, amount specified)
 - 0.7-0.8: Most info clear, minor ambiguity
 - 0.5-0.6: Intent clear but missing details
 - 0.3-0.4: Unclear intent, need clarification
-- 0.1-0.2: Very unclear or impossible request`;
+- 0.1-0.2: Very unclear or impossible request
+
+EXAMPLES:
+"swap 0.001 sol to melania" → {"action": "swap", "fromToken": "SOL", "toToken": "MELANIA", "amount": 0.001, "confidence": 0.9}
+"exchange 1 SOL for USDC" → {"action": "swap", "fromToken": "SOL", "toToken": "USDC", "amount": 1, "confidence": 0.9}`;
 
       const response = await this.callGroqAPI(
         [
@@ -144,9 +216,11 @@ CONFIDENCE SCORING:
 
       // Validate the response
       if (!this.validateSwapIntent(parsed, userTokens, availableTokens)) {
-        return this.fallbackParseIntent(userInput, userTokens, availableTokens);
+        console.log('❌ AI parsing failed validation, using fallback');
+        return fallbackResult;
       }
 
+      console.log('✅ AI parsing successful:', parsed);
       return parsed as SwapIntent;
     } catch (error) {
       console.error('❌ Failed to parse intent:', error);
@@ -155,213 +229,331 @@ CONFIDENCE SCORING:
   }
 
   /**
-   * Analyze user's portfolio and provide insights
+   * Execute a swap using the intent API service
    */
-  async analyzePortfolio(userTokens: TurnkeyTokenBalance[]): Promise<PortfolioAnalysis> {
+  async executeSwapIntent(
+    fromTokenSymbol: string,
+    toTokenSymbol: string,
+    amount: number,
+    availableTokens: IntentToken[]
+  ): Promise<SwapExecutionResult> {
     try {
-      const totalValue = userTokens.reduce((sum, token) => sum + (token.value || 0), 0);
+      console.log('🚀 executeSwapIntent called:', { fromTokenSymbol, toTokenSymbol, amount });
 
-      const portfolioData = userTokens
-        .filter((token) => token.uiAmount > 0)
-        .map((token) => ({
-          symbol: token.symbol,
-          amount: token.uiAmount,
-          value: token.value || 0,
-          percentage: totalValue > 0 ? ((token.value || 0) / totalValue) * 100 : 0,
-        }))
-        .sort((a, b) => b.value - a.value);
+      // Get user organization ID
+      const userOrgId = intentApiService.getUserOrganizationId();
+      if (!userOrgId) {
+        return {
+          success: false,
+          message: '❌ Authentication error. Please log in again.',
+          error: 'No user organization ID found',
+        };
+      }
 
-      const prompt = `PORTFOLIO ANALYSIS REQUEST
+      // Get user portfolio data
+      const portfolioData = await turnkeySolanaService.getPortfolioData();
+      if (!portfolioData.wallets.length) {
+        return {
+          success: false,
+          message: '❌ No wallet found. Please set up your wallet first.',
+          error: 'No wallets found',
+        };
+      }
 
-Current Holdings:
-${portfolioData
-  .map(
-    (token) =>
-      `• ${token.symbol}: ${token.amount.toFixed(4)} tokens = $${token.value.toFixed(2)} (${token.percentage.toFixed(1)}%)`
-  )
-  .join('\n')}
+      const userAddress = portfolioData.wallets[0].address;
 
-Total Portfolio Value: $${totalValue.toFixed(2)}
+      // Find token contracts
+      const fromToken = this.findTokenBySymbol(fromTokenSymbol, availableTokens);
+      const toToken = this.findTokenBySymbol(toTokenSymbol, availableTokens);
 
-ANALYSIS REQUIREMENTS:
-1. Assess diversification quality
-2. Identify concentration risks
-3. Evaluate token type distribution (stablecoins, meme coins, utility tokens)
-4. Provide specific, actionable recommendations
-5. Assess overall risk level based on holdings
+      if (!fromToken) {
+        return {
+          success: false,
+          message: `❌ Token "${fromTokenSymbol}" not found or not supported.`,
+          error: 'From token not found',
+        };
+      }
 
-Respond with JSON:
-{
-  "totalValue": ${totalValue},
-  "topHoldings": [
-    {"symbol": "TOKEN", "value": actual_value, "percentage": actual_percentage}
-  ],
-  "recommendations": [
-    "specific_actionable_recommendation",
-    "another_specific_recommendation"
-  ],
-  "riskLevel": "low" | "medium" | "high",
-  "insights": [
-    "key_insight_about_portfolio",
-    "another_important_insight"
-  ]
-}
+      if (!toToken) {
+        return {
+          success: false,
+          message: `❌ Token "${toTokenSymbol}" not found or not supported.`,
+          error: 'To token not found',
+        };
+      }
 
-RECOMMENDATION GUIDELINES:
-- Be specific about amounts or percentages
-- Focus on risk management and diversification
-- Consider Solana ecosystem specifics
-- Suggest concrete next steps
-- Keep recommendations practical and achievable`;
+      // Convert amount to base units
+      const amountInBaseUnits = (amount * Math.pow(10, fromToken.decimals)).toString();
 
-      const response = await this.callGroqAPI(
-        [
-          { role: 'system', content: this.getSystemPrompt() },
-          { role: 'user', content: prompt },
-        ],
-        {
-          temperature: 0.3,
-          maxTokens: 800,
-        }
-      );
+      // Create quote request
+      const quoteRequest = {
+        amountIn: amountInBaseUnits,
+        fromToken: fromToken.contract,
+        toToken: toToken.contract,
+        fromChain: 'solana',
+        toChain: 'solana',
+        slippageBps: 100, // 1% slippage
+        userOrganizationId: userOrgId,
+      };
 
-      const parsed = JSON.parse(response);
-      return parsed as PortfolioAnalysis;
+      console.log('📊 Getting quote:', quoteRequest);
+
+      // Get quote
+      const quoteResponse = await intentApiService.getQuote(quoteRequest);
+
+      if (!quoteResponse.success || !quoteResponse.quote.length) {
+        return {
+          success: false,
+          message:
+            '❌ Unable to get a quote for this swap. Please try different tokens or amounts.',
+          error: 'No quote available',
+        };
+      }
+
+      const quote = quoteResponse.quote[0];
+
+      console.log('✅ Quote received:', {
+        expectedAmountOut: quote.expectedAmountOut,
+        price: quote.price,
+        priceImpact: quote.priceImpact,
+      });
+
+      // Create swap request
+      const swapRequest = {
+        quote,
+        originAddress: userAddress,
+        destinationAddress: userAddress,
+        userOrganizationId: userOrgId,
+      };
+
+      console.log('🔄 Executing swap...');
+
+      // Execute swap
+      const swapResponse = await intentApiService.executeSwap(swapRequest);
+
+      if (swapResponse.success && swapResponse.result.success) {
+        return {
+          success: true,
+          message: `# 🎉 Swap Successful!
+
+**Transaction:** \`${swapResponse.result.signature.slice(0, 8)}...${swapResponse.result.signature.slice(-8)}\`
+
+**Details:**
+- **From:** ${amount} ${fromTokenSymbol}
+- **To:** ~${quote.expectedAmountOut.toFixed(6)} ${toTokenSymbol}
+- **Rate:** 1 ${fromTokenSymbol} = ${quote.price.toFixed(6)} ${toTokenSymbol}
+
+🔍 **[Track on Solscan](${swapResponse.result.explorerUrl})**
+
+💫 Tokens will arrive shortly!`,
+          data: {
+            signature: swapResponse.result.signature,
+            explorerUrl: swapResponse.result.explorerUrl,
+            quote,
+            fromToken,
+            toToken,
+            amount,
+          },
+        };
+      } else {
+        return {
+          success: false,
+          message: '❌ Swap failed. Please try again or contact support.',
+          error: 'Swap execution failed',
+          data: swapResponse,
+        };
+      }
     } catch (error) {
-      console.error('❌ Failed to analyze portfolio:', error);
-      return this.fallbackPortfolioAnalysis(userTokens);
-    }
-  }
-
-  /**
-   * Generate smart suggestions based on context
-   */
-  async generateSuggestions(
-    userTokens: TurnkeyTokenBalance[],
-    availableTokens: IntentToken[],
-    context: 'welcome' | 'after_swap' | 'error' | 'portfolio'
-  ): Promise<string[]> {
-    let topUserTokens;
-    try {
-      topUserTokens = userTokens
-        .filter((t) => t.uiAmount > 0 && t.value && t.value > 1)
-        .sort((a, b) => (b.value || 0) - (a.value || 0))
-        .slice(0, 3);
-
-      const prompt = `SUGGESTION CONTEXT:
-User's top tokens: ${topUserTokens.map((t) => `${t.symbol} ($${t.value?.toFixed(2)})`).join(', ')}
-Context: ${context}
-Available tokens: ${availableTokens
-        .slice(0, 15)
-        .map((t) => t.symbol)
-        .join(', ')}
-
-Generate 4 specific, actionable suggestions that:
-1. Are relevant to the current context
-2. Use actual token symbols the user owns
-3. Are practical and achievable
-4. Guide the user toward valuable actions
-
-Respond with JSON array:
-["specific_suggestion_1", "specific_suggestion_2", "specific_suggestion_3", "specific_suggestion_4"]
-
-SUGGESTION QUALITY:
-- Use exact token symbols and realistic amounts
-- Avoid generic phrases like "manage your portfolio"
-- Include specific actions like "Swap 50 BONK to USDC"
-- Consider user's actual holdings and context`;
-
-      const response = await this.callGroqAPI(
-        [
-          { role: 'system', content: this.getSystemPrompt() },
-          { role: 'user', content: prompt },
-        ],
-        {
-          temperature: 0.5,
-          maxTokens: 400,
-        }
-      );
-
-      const suggestions = JSON.parse(response);
-      return Array.isArray(suggestions)
-        ? suggestions.slice(0, 4)
-        : this.getFallbackSuggestions(context, topUserTokens);
-    } catch (error) {
-      console.error('❌ Failed to generate suggestions:', error);
-      return this.getFallbackSuggestions(context, topUserTokens || []);
-    }
-  }
-
-  /**
-   * Generate contextual conversation responses
-   */
-  async generateResponse(
-    userInput: string,
-    context: {
-      userTokens: TurnkeyTokenBalance[];
-      availableTokens: IntentToken[];
-      lastAction?: string;
-      portfolioValue?: number;
-    }
-  ): Promise<{
-    message: string;
-    suggestions: string[];
-    actionRequired?: string;
-  }> {
-    try {
-      const { userTokens, availableTokens, lastAction, portfolioValue } = context;
-
-      const prompt = `CONVERSATION CONTEXT:
-User has ${userTokens.length} different tokens
-Portfolio value: $${portfolioValue?.toFixed(2) || 'unknown'}
-Last action: ${lastAction || 'none'}
-Available tokens: ${availableTokens
-        .slice(0, 20)
-        .map((t) => t.symbol)
-        .join(', ')}
-
-USER MESSAGE: "${userInput}"
-
-TASK: Generate a helpful, natural response that:
-1. Directly addresses the user's message
-2. Provides specific information or guidance
-3. Suggests concrete next steps
-4. Maintains conversational flow
-
-RESPONSE RULES:
-- Be conversational but professional
-- Don't repeat information unnecessarily
-- Provide specific token names and amounts when relevant
-- Ask clarifying questions if needed
-- Be honest about limitations
-
-Respond with JSON:
-{
-  "message": "natural_conversational_response",
-  "suggestions": ["specific_suggestion1", "specific_suggestion2"],
-  "actionRequired": "swap" | "portfolio" | "help" | null
-}`;
-
-      const response = await this.callGroqAPI(
-        [
-          { role: 'system', content: this.getSystemPrompt() },
-          { role: 'user', content: prompt },
-        ],
-        {
-          temperature: 0.4,
-          maxTokens: 600,
-        }
-      );
-
-      return JSON.parse(response);
-    } catch (error) {
-      console.error('❌ Failed to generate response:', error);
+      console.error('❌ Failed to execute swap intent:', error);
       return {
-        message:
-          "I'm having trouble processing your request right now. Could you please rephrase what you'd like to do?",
-        suggestions: ['Show my portfolio', 'Help me swap tokens', 'What tokens can I trade?'],
+        success: false,
+        message: '❌ Failed to execute swap. Please try again.',
+        error: error instanceof Error ? error.message : 'Unknown error',
       };
     }
+  }
+
+  /**
+   * Helper method to find token by symbol
+   */
+  private findTokenBySymbol(symbol: string, availableTokens: IntentToken[]): IntentToken | null {
+    // Check available tokens first
+    const token = availableTokens.find((t) => t.symbol.toUpperCase() === symbol.toUpperCase());
+    if (token) return token;
+
+    // Check for SOL
+    if (symbol.toUpperCase() === 'SOL') {
+      return {
+        contract: '0x0000000000000000000000000000000000000000',
+        symbol: 'SOL',
+        decimals: 9,
+        name: 'SOL',
+        logoURI: 'https://statics.mayan.finance/SOL.png',
+        chainName: 'solana',
+        standard: 'native',
+      };
+    }
+
+    return null;
+  }
+
+  /**
+   * Enhanced fallback intent parsing without AI
+   */
+  private fallbackParseIntent(
+    userInput: string,
+    userTokens: TurnkeyTokenBalance[],
+    availableTokens: IntentToken[]
+  ): SwapIntent {
+    const lowerInput = userInput.toLowerCase();
+
+    // Check for portfolio requests
+    if (
+      lowerInput.includes('portfolio') ||
+      lowerInput.includes('balance') ||
+      lowerInput.includes('holdings')
+    ) {
+      return {
+        action: 'portfolio',
+        confidence: 0.8,
+        reasoning: 'Detected portfolio-related keywords',
+        suggestions: ['Show detailed portfolio', 'Analyze my holdings', 'Check token values'],
+      };
+    }
+
+    // Check for swap intent
+    if (
+      lowerInput.includes('swap') ||
+      lowerInput.includes('exchange') ||
+      lowerInput.includes('trade')
+    ) {
+      // Try to extract tokens and amounts
+      const amountMatch = lowerInput.match(/(\d+(?:\.\d+)?)/);
+      const amount = amountMatch ? parseFloat(amountMatch[1]) : undefined;
+
+      // Create comprehensive token lists including SOL
+      const allUserTokens = [...userTokens.map((t) => t.symbol.toLowerCase()), 'sol'];
+      const allAvailableTokens = [
+        ...availableTokens.map((t) => t.symbol.toLowerCase()),
+        'sol',
+        'melania',
+      ];
+
+      let fromToken: string | undefined;
+      let toToken: string | undefined;
+
+      // Enhanced token extraction - look for tokens in the input
+      // First, try to find tokens before "to" keyword
+      const toIndex = lowerInput.indexOf(' to ');
+      if (toIndex !== -1) {
+        const beforeTo = lowerInput.substring(0, toIndex);
+        const afterTo = lowerInput.substring(toIndex + 4);
+
+        // Find from token in the part before "to"
+        for (const symbol of allUserTokens) {
+          if (beforeTo.includes(symbol)) {
+            fromToken = symbol.toUpperCase();
+            break;
+          }
+        }
+
+        // Find to token in the part after "to"
+        for (const symbol of allAvailableTokens) {
+          if (afterTo.includes(symbol)) {
+            toToken = symbol.toUpperCase();
+            break;
+          }
+        }
+      } else {
+        // If no "to" keyword, try to find any tokens mentioned
+        for (const symbol of allUserTokens) {
+          if (lowerInput.includes(symbol)) {
+            fromToken = symbol.toUpperCase();
+            break;
+          }
+        }
+      }
+
+      console.log('🔍 Fallback parsing:', {
+        input: userInput,
+        fromToken,
+        toToken,
+        amount,
+        allUserTokens: allUserTokens.slice(0, 5),
+        allAvailableTokens: allAvailableTokens.slice(0, 5),
+      });
+
+      return {
+        action: 'swap',
+        fromToken,
+        toToken,
+        amount,
+        confidence: fromToken && toToken && amount ? 0.9 : fromToken && toToken ? 0.7 : 0.4,
+        reasoning: `Detected swap intent: ${fromToken || '?'} → ${toToken || '?'} (${amount || '?'})`,
+        suggestions: [
+          fromToken && toToken && amount
+            ? `Execute swap: ${amount} ${fromToken} to ${toToken}`
+            : 'Specify both tokens to swap',
+          'Include the amount you want to swap',
+          'Check your available balances',
+        ],
+      };
+    }
+
+    // Default to help
+    return {
+      action: 'help',
+      confidence: 0.5,
+      reasoning: 'Intent unclear, providing general guidance',
+      suggestions: [
+        'Try "swap 1 SOL to USDC"',
+        'Say "show my portfolio"',
+        'Ask "what tokens can I swap?"',
+      ],
+    };
+  }
+
+  /**
+   * Validate swap intent response
+   */
+  private validateSwapIntent(
+    intent: any,
+    userTokens: TurnkeyTokenBalance[],
+    availableTokens: IntentToken[]
+  ): boolean {
+    if (!intent || typeof intent !== 'object') return false;
+    if (!['swap', 'portfolio', 'help', 'unknown'].includes(intent.action)) return false;
+    if (typeof intent.confidence !== 'number' || intent.confidence < 0 || intent.confidence > 1)
+      return false;
+
+    // For swap actions, validate tokens more thoroughly
+    if (intent.action === 'swap') {
+      // Validate from token (must be owned by user or be SOL)
+      if (intent.fromToken) {
+        const hasToken = userTokens.some(
+          (t) => t.symbol.toUpperCase() === intent.fromToken.toUpperCase() && t.uiAmount > 0
+        );
+        const isSOL = intent.fromToken.toUpperCase() === 'SOL';
+        if (!hasToken && !isSOL) {
+          console.log('❌ Validation failed: fromToken not owned', intent.fromToken);
+          return false;
+        }
+      }
+
+      // Validate to token (must be available or be SOL)
+      if (intent.toToken) {
+        const isAvailable = availableTokens.some(
+          (t) => t.symbol.toUpperCase() === intent.toToken.toUpperCase()
+        );
+        const isSOL = intent.toToken.toUpperCase() === 'SOL';
+        if (!isAvailable && !isSOL) {
+          console.log('❌ Validation failed: toToken not available', intent.toToken);
+          return false;
+        }
+      }
+    }
+
+    return true;
   }
 
   /**
@@ -417,129 +609,8 @@ Respond with JSON:
     }
   }
 
-  /**
-   * Validate swap intent response
-   */
-  private validateSwapIntent(
-    intent: any,
-    userTokens: TurnkeyTokenBalance[],
-    availableTokens: IntentToken[]
-  ): boolean {
-    if (!intent || typeof intent !== 'object') return false;
-    if (!['swap', 'portfolio', 'help', 'unknown'].includes(intent.action)) return false;
-    if (typeof intent.confidence !== 'number' || intent.confidence < 0 || intent.confidence > 1)
-      return false;
-
-    // Validate token ownership and availability
-    if (intent.fromToken) {
-      const hasToken = userTokens.some((t) => t.symbol === intent.fromToken && t.uiAmount > 0);
-      if (!hasToken) return false;
-    }
-
-    if (intent.toToken) {
-      const isAvailable = availableTokens.some((t) => t.symbol === intent.toToken);
-      if (!isAvailable) return false;
-    }
-
-    return true;
-  }
-
-  /**
-   * Fallback intent parsing without AI
-   */
-  private fallbackParseIntent(
-    userInput: string,
-    userTokens: TurnkeyTokenBalance[],
-    availableTokens: IntentToken[]
-  ): SwapIntent {
-    const lowerInput = userInput.toLowerCase();
-
-    // Check for portfolio requests
-    if (
-      lowerInput.includes('portfolio') ||
-      lowerInput.includes('balance') ||
-      lowerInput.includes('holdings')
-    ) {
-      return {
-        action: 'portfolio',
-        confidence: 0.8,
-        reasoning: 'Detected portfolio-related keywords',
-        suggestions: ['Show detailed portfolio', 'Analyze my holdings', 'Check token values'],
-      };
-    }
-
-    // Check for swap intent
-    if (
-      lowerInput.includes('swap') ||
-      lowerInput.includes('exchange') ||
-      lowerInput.includes('trade')
-    ) {
-      // Try to extract tokens and amounts
-      const amountMatch = lowerInput.match(/(\d+(?:\.\d+)?)/);
-      const amount = amountMatch ? parseFloat(amountMatch[1]) : undefined;
-
-      // Simple token extraction
-      const userTokenSymbols = userTokens.map((t) => t.symbol.toLowerCase());
-      const availableTokenSymbols = availableTokens.map((t) => t.symbol.toLowerCase());
-
-      let fromToken: string | undefined;
-      let toToken: string | undefined;
-
-      // Look for "from" token
-      for (const symbol of userTokenSymbols) {
-        if (lowerInput.includes(symbol.toLowerCase())) {
-          fromToken = symbol.toUpperCase();
-          break;
-        }
-      }
-
-      // Look for "to" token
-      const toPatterns = ['to ', 'for ', 'into '];
-      for (const pattern of toPatterns) {
-        const index = lowerInput.indexOf(pattern);
-        if (index !== -1) {
-          const afterPattern = lowerInput.substring(index + pattern.length);
-          for (const symbol of availableTokenSymbols) {
-            if (afterPattern.includes(symbol.toLowerCase())) {
-              toToken = symbol.toUpperCase();
-              break;
-            }
-          }
-        }
-      }
-
-      return {
-        action: 'swap',
-        fromToken,
-        toToken,
-        amount,
-        confidence: fromToken && toToken ? 0.7 : 0.4,
-        reasoning: 'Detected swap intent but missing specific details',
-        suggestions: [
-          'Specify both tokens to swap',
-          'Include the amount you want to swap',
-          'Check your available balances',
-        ],
-      };
-    }
-
-    // Default to help
-    return {
-      action: 'help',
-      confidence: 0.5,
-      reasoning: 'Intent unclear, providing general guidance',
-      suggestions: [
-        'Try "swap 1 SOL to USDC"',
-        'Say "show my portfolio"',
-        'Ask "what tokens can I swap?"',
-      ],
-    };
-  }
-
-  /**
-   * Fallback portfolio analysis
-   */
-  private fallbackPortfolioAnalysis(userTokens: TurnkeyTokenBalance[]): PortfolioAnalysis {
+  // Legacy methods for backward compatibility
+  async analyzePortfolio(userTokens: TurnkeyTokenBalance[]): Promise<PortfolioAnalysis> {
     const totalValue = userTokens.reduce((sum, token) => sum + (token.value || 0), 0);
 
     const topHoldings = userTokens
@@ -569,8 +640,17 @@ Respond with JSON:
     };
   }
 
-  private getFallbackSuggestions(context: string, topTokens: TurnkeyTokenBalance[]): string[] {
-    const baseToken = topTokens[0]?.symbol || 'SOL';
+  async generateSuggestions(
+    userTokens: TurnkeyTokenBalance[],
+    availableTokens: IntentToken[],
+    context: 'welcome' | 'after_swap' | 'error' | 'portfolio'
+  ): Promise<string[]> {
+    const topUserTokens = userTokens
+      .filter((t) => t.uiAmount > 0 && t.value && t.value > 1)
+      .sort((a, b) => (b.value || 0) - (a.value || 0))
+      .slice(0, 3);
+
+    const baseToken = topUserTokens[0]?.symbol || 'SOL';
 
     switch (context) {
       case 'welcome':
@@ -608,5 +688,5 @@ Respond with JSON:
 }
 
 // Export singleton instance
-export const groqAIService = GroqAIService.getInstance();
+export const groqAIService = EnhancedGroqAIService.getInstance();
 export default groqAIService;

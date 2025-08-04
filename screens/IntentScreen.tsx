@@ -172,7 +172,44 @@ I'm your **AI-powered DeFi assistant** for Solana.
 
     try {
       // Use AI to parse user intent
-      const intent = await groqAIService.parseSwapIntent(input, userTokens, availableTokens);
+      const result = await groqAIService.parseAndExecuteSwapIntent(
+        input,
+        userTokens,
+        availableTokens
+      );
+
+      console.log('🤖 Enhanced AI result:', result);
+
+      // If swap was executed, show the result and exit early
+      if (result.executionResult) {
+        if (result.executionResult.success) {
+          addBotMessage(result.executionResult.message, result.executionResult.data);
+
+          // Generate post-swap suggestions
+          const afterSwapSuggestions = await groqAIService.generateSuggestions(
+            userTokens,
+            availableTokens,
+            'after_swap'
+          );
+          setSuggestions(afterSwapSuggestions);
+
+          // Refresh user tokens after successful swap
+          setTimeout(async () => {
+            try {
+              const newPortfolioData = await turnkeySolanaService.getPortfolioData();
+              setUserTokens(newPortfolioData.allTokenBalances);
+              addSystemMessage('💫 Portfolio refreshed with latest balances');
+            } catch (error) {
+              console.log('Failed to refresh portfolio:', error);
+            }
+          }, 3000);
+        } else {
+          addBotMessage(result.executionResult.message);
+        }
+        return; // Exit early since swap was handled
+      }
+
+      const intent = result.intent;
 
       // Update suggestions based on intent
       setSuggestions(intent.suggestions || []);
@@ -397,28 +434,9 @@ Just tell me what you want to do in **plain English**!`
     }
   };
 
-  const handleFromTokenSelection = async (input: string) => {
-    const token = findToken(input.toUpperCase());
-    if (!token) {
-      addBotMessage(`❌ I couldn't find "${input}". Please choose from your available tokens:`);
-      showUserTokens();
-      return;
-    }
-
-    const userBalance = getUserTokenBalance(token.symbol);
-    if (!userBalance || userBalance.uiAmount === 0) {
-      addBotMessage(`❌ You don't have any ${token.symbol}. Please choose a token you own:`);
-      showUserTokens();
-      return;
-    }
-
-    setSwapState((prev) => ({ ...prev, step: 'selecting_to', fromToken: token }));
-    addBotMessage(`✅ Selected ${token.symbol}! What token would you like to receive?`);
-    showAvailableTokens('to');
-  };
-
   const handleToTokenSelection = async (input: string) => {
     const token = findToken(input.toUpperCase());
+
     if (!token) {
       addBotMessage(`❌ I couldn't find "${input}". Please choose from available tokens:`);
       showAvailableTokens('to');
@@ -449,6 +467,26 @@ Just tell me what you want to do in **plain English**!`
       `${(userBalance!.uiAmount * 0.25).toFixed(4)}`,
       '1',
     ]);
+  };
+
+  const handleFromTokenSelection = async (input: string) => {
+    const token = findToken(input.toUpperCase());
+    if (!token) {
+      addBotMessage(`❌ I couldn't find "${input}". Please choose from your available tokens:`);
+      showUserTokens();
+      return;
+    }
+
+    const userBalance = getUserTokenBalance(token.symbol);
+    if (!userBalance || userBalance.uiAmount === 0) {
+      addBotMessage(`❌ You don't have any ${token.symbol}. Please choose a token you own:`);
+      showUserTokens();
+      return;
+    }
+
+    setSwapState((prev) => ({ ...prev, step: 'selecting_to', fromToken: token }));
+    addBotMessage(`✅ Selected ${token.symbol}! What token would you like to receive?`);
+    showAvailableTokens('to');
   };
 
   const handleAmountEntry = async (input: string) => {
@@ -526,7 +564,7 @@ Just tell me what you want to do in **plain English**!`
       const rate = quote.price.toFixed(6);
 
       addBotMessage(
-        `✅ **Quote Ready!**\n\n📊 **Swap Details:**\n• From: ${amount} ${fromToken.symbol}\n• To: ~${quote.expectedAmountOut.toFixed(6)} ${toToken.symbol}\n• Rate: 1 ${fromToken.symbol} = ${rate} ${toToken.symbol}${priceImpact}\n• Route: ${quote.meta.title}\n• ETA: ${quote.clientEta}\n\n🚀 **Ready to execute this swap?**`,
+        `✅ **Quote Ready!**\n\n📊 **Swap Details:**\n• From: ${amount} ${fromToken.symbol}\n• To: ~${quote.expectedAmountOut.toLocaleString()} ${toToken.symbol}\n• Rate: 1 ${fromToken.symbol} = ${rate} ${toToken.symbol}${priceImpact}\n• Route: ${quote.meta.title}\n• ETA: ${quote.clientEta}\n\n🚀 **Ready to execute this swap?**`,
         { quote, fromToken, toToken, amount }
       );
 
@@ -884,7 +922,8 @@ Just tell me what you want to do in **plain English**!`
               <View className="flex-row items-center justify-between">
                 <Text className="text-sm text-gray-300">Expected Output</Text>
                 <Text className="font-bold text-primary">
-                  {message.data.quote.expectedAmountOut.toFixed(6)} {message.data.toToken?.symbol}
+                  {message.data.quote.expectedAmountOut.toLocaleString()}{' '}
+                  {message.data.toToken?.symbol}
                 </Text>
               </View>
               <View className="mt-2 flex-row items-center justify-between">
