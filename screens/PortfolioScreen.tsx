@@ -28,6 +28,7 @@ import { intentFiMobile, networkService } from '../services';
 
 export function PortfolioScreen() {
   const [selectedTimeframe, setSelectedTimeframe] = useState('1D');
+  const [selectedTab, setSelectedTab] = useState<'holdings' | 'transactions'>('holdings');
   const [portfolioData, setPortfolioData] = useState<TurnkeyPortfolioData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -451,84 +452,225 @@ export function PortfolioScreen() {
           </Animated.View>
         )}
 
-        {/* Holdings */}
-        <Animated.View entering={FadeInLeft.duration(600).delay(300)} className="mb-8 px-4">
-          <Text className="mb-4 text-lg font-semibold text-white">Holdings ({assets.length})</Text>
-
-          {assets.length === 0 ? (
-            <View className="items-center rounded-xl border border-dark-border bg-dark-card p-8">
-              <Ionicons name="list-outline" size={48} color="#8E8E93" />
-              <Text className="mt-4 text-center text-gray-400">No assets found</Text>
-              <Text className="mt-2 text-xs text-gray-500">
-                Your Turnkey wallet doesn&apos;t contain any tokens
+        {/* Tab Navigation */}
+        <Animated.View entering={FadeInLeft.duration(600).delay(300)} className="mb-4 px-4">
+          <View className="flex-row rounded-xl border border-dark-border bg-dark-card p-1">
+            <TouchableOpacity
+              onPress={() => setSelectedTab('holdings')}
+              className={`flex-1 rounded-lg py-3 ${
+                selectedTab === 'holdings' ? 'bg-primary' : 'bg-transparent'
+              }`}>
+              <Text
+                className={`text-center font-medium ${
+                  selectedTab === 'holdings' ? 'text-white' : 'text-gray-400'
+                }`}>
+                Holdings ({assets.length})
               </Text>
-            </View>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => setSelectedTab('transactions')}
+              className={`flex-1 rounded-lg py-3 ${
+                selectedTab === 'transactions' ? 'bg-primary' : 'bg-transparent'
+              }`}>
+              <Text
+                className={`text-center font-medium ${
+                  selectedTab === 'transactions' ? 'text-white' : 'text-gray-400'
+                }`}>
+                Recent Transactions
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </Animated.View>
+
+        {/* Tab Content */}
+        <Animated.View entering={FadeInLeft.duration(600).delay(350)} className="mb-8 px-4">
+          {selectedTab === 'holdings' ? (
+            // Holdings Tab
+            <>
+              {assets.length === 0 ? (
+                <View className="items-center rounded-xl border border-dark-border bg-dark-card p-8">
+                  <Ionicons name="list-outline" size={48} color="#8E8E93" />
+                  <Text className="mt-4 text-center text-gray-400">No assets found</Text>
+                  <Text className="mt-2 text-xs text-gray-500">
+                    Your Turnkey wallet doesn&apos;t contain any tokens
+                  </Text>
+                </View>
+              ) : (
+                assets.map((asset, index) => (
+                  <Animated.View
+                    key={`${asset.mint}-${index}`}
+                    entering={BounceIn.duration(600).delay(index * 100)}>
+                    <TouchableOpacity
+                      onPress={() => handleAssetPress(asset)}
+                      className="mb-3 flex-row items-center rounded-2xl border border-dark-border bg-dark-card p-4">
+                      {/* Token Icon */}
+                      <View className="mr-4 h-12 w-12 items-center justify-center rounded-full bg-primary/20">
+                        {asset.logoURI ? (
+                          <Image
+                            source={{ uri: asset.logoURI }}
+                            className="h-8 w-8 rounded-full"
+                            onError={() => console.log('Failed to load token image:', asset.logoURI)}
+                          />
+                        ) : (
+                          <Text className="text-sm font-bold text-primary">
+                            {asset.symbol.slice(0, 3)}
+                          </Text>
+                        )}
+                      </View>
+
+                      <View className="flex-1">
+                        <View className="flex-row items-center justify-between">
+                          <View>
+                            <Text className="font-semibold text-white">{asset.symbol}</Text>
+                            <Text className="text-sm text-gray-400">
+                              {asset.name || 'Unknown Token'}
+                            </Text>
+                          </View>
+                          <View className="items-end">
+                            <Text className="font-semibold text-white">
+                              ${(asset.value || 0).toFixed(2)}
+                            </Text>
+                            <Text className="text-sm text-gray-400">
+                              {asset.uiAmount.toLocaleString(undefined, {
+                                minimumFractionDigits: asset.symbol === 'SOL' ? 4 : 0,
+                                maximumFractionDigits: asset.symbol === 'SOL' ? 4 : 6,
+                              })}{' '}
+                              {asset.symbol}
+                            </Text>
+                          </View>
+                        </View>
+
+                        <View className="mt-2 flex-row items-center justify-between">
+                          <Text className="text-xs text-gray-500">
+                            Price: ${(asset.price || 0).toFixed(asset.symbol === 'SOL' ? 2 : 6)}
+                          </Text>
+                          {asset.priceChange24h !== undefined && (
+                            <Text
+                              className="text-xs"
+                              style={{
+                                color: asset.priceChange24h >= 0 ? '#00D4AA' : '#EF4444',
+                              }}>
+                              {asset.priceChange24h >= 0 ? '+' : ''}
+                              {asset.priceChange24h.toFixed(2)}%
+                            </Text>
+                          )}
+                        </View>
+                      </View>
+
+                      <Ionicons name="chevron-forward" size={20} color="#8E8E93" />
+                    </TouchableOpacity>
+                  </Animated.View>
+                ))
+              )}
+            </>
           ) : (
-            assets.map((asset, index) => (
-              <Animated.View
-                key={`${asset.mint}-${index}`}
-                entering={BounceIn.duration(600).delay(index * 100)}>
-                <TouchableOpacity
-                  onPress={() => handleAssetPress(asset)}
-                  className="mb-3 flex-row items-center rounded-2xl border border-dark-border bg-dark-card p-4">
-                  {/* Token Icon */}
-                  <View className="mr-4 h-12 w-12 items-center justify-center rounded-full bg-primary/20">
-                    {asset.logoURI ? (
-                      <Image
-                        source={{ uri: asset.logoURI }}
-                        className="h-8 w-8 rounded-full"
-                        onError={() => console.log('Failed to load token image:', asset.logoURI)}
-                      />
-                    ) : (
-                      <Text className="text-sm font-bold text-primary">
-                        {asset.symbol.slice(0, 3)}
-                      </Text>
-                    )}
-                  </View>
-
-                  <View className="flex-1">
-                    <View className="flex-row items-center justify-between">
-                      <View>
-                        <Text className="font-semibold text-white">{asset.symbol}</Text>
-                        <Text className="text-sm text-gray-400">
-                          {asset.name || 'Unknown Token'}
-                        </Text>
+            // Recent Transactions Tab
+            <>
+              {portfolioData?.recentTransactions.length === 0 ? (
+                <View className="items-center rounded-xl border border-dark-border bg-dark-card p-8">
+                  <Ionicons name="time-outline" size={48} color="#8E8E93" />
+                  <Text className="mt-4 text-center text-gray-400">No recent transactions</Text>
+                  <Text className="mt-2 text-xs text-gray-500">
+                    Your recent transactions will appear here
+                  </Text>
+                </View>
+              ) : (
+                portfolioData?.recentTransactions.slice(0, 5).map((transaction, index) => (
+                  <Animated.View
+                    key={`${transaction.hash}-${index}`}
+                    entering={BounceIn.duration(600).delay(index * 100)}>
+                    <TouchableOpacity
+                      onPress={() => {
+                        Alert.alert(
+                          'Transaction Details',
+                          `Hash: ${transaction.hash.slice(0, 20)}...\nType: ${transaction.type.toUpperCase()}\nValue: ${transaction.value.toFixed(4)} SOL (${transaction.valueUSD.toFixed(2)})\nGas Fee: ${transaction.gasFee.toFixed(6)} SOL (${transaction.gasFeeUSD.toFixed(4)})\nStatus: ${transaction.successful ? 'Success' : 'Failed'}\nBlock: ${transaction.blockHeight}\nTime: ${new Date(transaction.timestamp).toLocaleString()}`,
+                          [
+                            { text: 'OK' },
+                            {
+                              text: 'Copy Hash',
+                              onPress: () => handleCopyAddress(transaction.hash),
+                            },
+                          ]
+                        );
+                      }}
+                      className="mb-3 flex-row items-center rounded-2xl border border-dark-border bg-dark-card p-4">
+                      {/* Transaction Icon */}
+                      <View className="mr-4 h-12 w-12 items-center justify-center rounded-full bg-primary/20">
+                        <Ionicons
+                          name={
+                            transaction.type === 'sent'
+                              ? 'arrow-up'
+                              : transaction.type === 'received'
+                              ? 'arrow-down'
+                              : transaction.type === 'swap'
+                              ? 'swap-horizontal'
+                              : 'help'
+                          }
+                          size={20}
+                          color={
+                            transaction.type === 'sent'
+                              ? '#EF4444'
+                              : transaction.type === 'received'
+                              ? '#00D4AA'
+                              : '#FF4500'
+                          }
+                        />
                       </View>
-                      <View className="items-end">
-                        <Text className="font-semibold text-white">
-                          ${(asset.value || 0).toFixed(2)}
-                        </Text>
-                        <Text className="text-sm text-gray-400">
-                          {asset.uiAmount.toLocaleString(undefined, {
-                            minimumFractionDigits: asset.symbol === 'SOL' ? 4 : 0,
-                            maximumFractionDigits: asset.symbol === 'SOL' ? 4 : 6,
-                          })}{' '}
-                          {asset.symbol}
-                        </Text>
+
+                      <View className="flex-1">
+                        <View className="flex-row items-center justify-between">
+                          <View>
+                            <Text className="font-semibold text-white">
+                              {transaction.description}
+                            </Text>
+                            <Text className="text-sm text-gray-400">
+                              {new Date(transaction.timestamp).toLocaleDateString()} at{' '}
+                              {new Date(transaction.timestamp).toLocaleTimeString()}
+                            </Text>
+                          </View>
+                          <View className="items-end">
+                            <Text
+                              className="font-semibold"
+                              style={{
+                                color:
+                                  transaction.type === 'sent'
+                                    ? '#EF4444'
+                                    : transaction.type === 'received'
+                                    ? '#00D4AA'
+                                    : '#FFFFFF',
+                              }}>
+                              {transaction.type === 'sent' ? '-' : transaction.type === 'received' ? '+' : ''}
+                              {transaction.value.toFixed(4)} SOL
+                            </Text>
+                            <Text className="text-sm text-gray-400">
+                              ${transaction.valueUSD.toFixed(2)}
+                            </Text>
+                          </View>
+                        </View>
+
+                        <View className="mt-2 flex-row items-center justify-between">
+                          <View className="flex-row items-center">
+                            <View
+                              className={`mr-2 h-2 w-2 rounded-full ${
+                                transaction.successful ? 'bg-green-500' : 'bg-red-500'
+                              }`}
+                            />
+                            <Text className="text-xs text-gray-500">
+                              {transaction.successful ? 'Success' : 'Failed'}
+                            </Text>
+                          </View>
+                          <Text className="text-xs text-gray-500">
+                            Fee: {transaction.gasFee.toFixed(6)} SOL
+                          </Text>
+                        </View>
                       </View>
-                    </View>
 
-                    <View className="mt-2 flex-row items-center justify-between">
-                      <Text className="text-xs text-gray-500">
-                        Price: ${(asset.price || 0).toFixed(asset.symbol === 'SOL' ? 2 : 6)}
-                      </Text>
-                      {asset.priceChange24h !== undefined && (
-                        <Text
-                          className="text-xs"
-                          style={{
-                            color: asset.priceChange24h >= 0 ? '#00D4AA' : '#EF4444',
-                          }}>
-                          {asset.priceChange24h >= 0 ? '+' : ''}
-                          {asset.priceChange24h.toFixed(2)}%
-                        </Text>
-                      )}
-                    </View>
-                  </View>
-
-                  <Ionicons name="chevron-forward" size={20} color="#8E8E93" />
-                </TouchableOpacity>
-              </Animated.View>
-            ))
+                      <Ionicons name="chevron-forward" size={20} color="#8E8E93" />
+                    </TouchableOpacity>
+                  </Animated.View>
+                ))
+              )}
+            </>
           )}
         </Animated.View>
       </ScrollView>
