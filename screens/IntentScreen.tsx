@@ -17,6 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { FadeInUp, FadeInLeft, BounceIn, SlideInRight } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
+import Markdown from 'react-native-markdown-display';
 
 // Import services
 import { useTurnkeyAuth } from '../providers/TurnkeyAuthProvider';
@@ -101,7 +102,22 @@ export function IntentScreen() {
       const tokenCount = portfolioData.allTokenBalances?.filter((t) => t.uiAmount > 0).length || 0;
 
       addBotMessage(
-        `👋 Welcome to IntentFI! I'm your AI-powered DeFi assistant.\n\n💰 **Portfolio Summary:**\n• Total Value: $${totalValue.toFixed(2)}\n• Active Tokens: ${tokenCount}\n• Network: Solana Mainnet\n\n🚀 I can help you swap tokens, analyze your portfolio, and provide personalized recommendations!\n\nWhat would you like to do?`
+        `# 👋 Welcome to IntentFI!
+
+I'm your **AI-powered DeFi assistant** for Solana.
+
+## 💰 Portfolio Summary
+- **Total Value:** ${totalValue.toFixed(2)}
+- **Active Tokens:** ${tokenCount}
+- **Network:** Solana Mainnet
+
+## 🚀 What I Can Do
+- **Token Swaps** with real-time quotes
+- **Portfolio Analysis** and insights
+- **Personalized Recommendations**
+- **Natural Language** processing
+
+*What would you like to do?*`
       );
     } catch (error) {
       console.error('❌ Failed to initialize chat:', error);
@@ -255,7 +271,27 @@ export function IntentScreen() {
 
   const handleHelpRequest = async () => {
     addBotMessage(
-      `🤖 **I'm here to help!** Here's what I can do:\n\n🔄 **Token Swaps:**\n• "Swap 1 SOL to USDC"\n• "Exchange 100 MELANIA for SOL"\n• "Trade my BONK for USDC"\n\n📊 **Portfolio Analysis:**\n• "Show my portfolio"\n• "Analyze my holdings"\n• "Check my balances"\n\n💡 **Smart Features:**\n• Natural language processing\n• Real-time quotes\n• Portfolio insights\n• Risk analysis\n\nJust tell me what you want to do in plain English!`
+      `# 🤖 I'm here to help!
+
+Here's what I can do for you:
+
+## 🔄 Token Swaps
+- *"Swap 1 SOL to USDC"*
+- *"Exchange 100 MELANIA for SOL"*
+- *"Trade my BONK for USDC"*
+
+## 📊 Portfolio Analysis
+- *"Show my portfolio"*
+- *"Analyze my holdings"*
+- *"Check my balances"*
+
+## 💡 Smart Features
+- **Natural language processing**
+- **Real-time quotes**
+- **Portfolio insights**
+- **Risk analysis**
+
+Just tell me what you want to do in **plain English**!`
     );
   };
 
@@ -668,6 +704,124 @@ export function IntentScreen() {
     await handleSendMessage();
   };
 
+  // Markdown styles for different message types
+  const getMarkdownStyles = (messageType: string) => {
+    const baseStyles = {
+      body: {
+        color:
+          messageType === 'user'
+            ? '#FFFFFF'
+            : messageType === 'system'
+              ? '#D1D5DB'
+              : messageType === 'portfolio'
+                ? '#D1FAE5'
+                : '#FFFFFF',
+        fontSize: 16,
+        lineHeight: 22,
+      },
+      heading1: {
+        color:
+          messageType === 'user' ? '#FFFFFF' : messageType === 'portfolio' ? '#10B981' : '#3B82F6',
+        fontSize: 20,
+        fontWeight: 'bold' as 'bold',
+        marginBottom: 8,
+      },
+      heading2: {
+        color:
+          messageType === 'user' ? '#FFFFFF' : messageType === 'portfolio' ? '#10B981' : '#3B82F6',
+        fontSize: 18,
+        fontWeight: 'bold' as 'bold',
+        marginBottom: 6,
+      },
+      heading3: {
+        color:
+          messageType === 'user' ? '#FFFFFF' : messageType === 'portfolio' ? '#10B981' : '#3B82F6',
+        fontSize: 16,
+        fontWeight: 'bold' as 'bold',
+        marginBottom: 4,
+      },
+      strong: {
+        color:
+          messageType === 'user' ? '#FFFFFF' : messageType === 'portfolio' ? '#10B981' : '#3B82F6',
+        fontWeight: 'bold' as 'bold',
+      },
+      em: {
+        fontStyle: 'italic' as 'italic',
+        color:
+          messageType === 'user' ? '#E5E7EB' : messageType === 'portfolio' ? '#A7F3D0' : '#E5E7EB',
+      },
+      code_inline: {
+        backgroundColor:
+          messageType === 'user'
+            ? 'rgba(255,255,255,0.1)'
+            : messageType === 'portfolio'
+              ? 'rgba(16,185,129,0.1)'
+              : 'rgba(59,130,246,0.1)',
+        color:
+          messageType === 'user' ? '#FFFFFF' : messageType === 'portfolio' ? '#10B981' : '#3B82F6',
+        paddingHorizontal: 4,
+        paddingVertical: 2,
+        borderRadius: 4,
+        fontSize: 14,
+        fontFamily: 'monospace',
+      },
+      code_block: {
+        backgroundColor:
+          messageType === 'user'
+            ? 'rgba(255,255,255,0.05)'
+            : messageType === 'portfolio'
+              ? 'rgba(16,185,129,0.05)'
+              : 'rgba(59,130,246,0.05)',
+        padding: 12,
+        borderRadius: 8,
+        marginVertical: 8,
+      },
+      fence: {
+        backgroundColor:
+          messageType === 'user'
+            ? 'rgba(255,255,255,0.05)'
+            : messageType === 'portfolio'
+              ? 'rgba(16,185,129,0.05)'
+              : 'rgba(59,130,246,0.05)',
+        padding: 12,
+        borderRadius: 8,
+        marginVertical: 8,
+      },
+      list_item: {
+        marginBottom: 4,
+      },
+      bullet_list: {
+        marginVertical: 8,
+      },
+      ordered_list: {
+        marginVertical: 8,
+      },
+      paragraph: {
+        marginBottom: 8,
+        lineHeight: 22,
+      },
+      link: {
+        color: messageType === 'portfolio' ? '#10B981' : '#3B82F6',
+        textDecorationLine: 'underline' as 'underline',
+      },
+      blockquote: {
+        backgroundColor:
+          messageType === 'user'
+            ? 'rgba(255,255,255,0.05)'
+            : messageType === 'portfolio'
+              ? 'rgba(16,185,129,0.05)'
+              : 'rgba(59,130,246,0.05)',
+        borderLeftWidth: 4,
+        borderLeftColor: messageType === 'portfolio' ? '#10B981' : '#3B82F6',
+        paddingLeft: 12,
+        paddingVertical: 8,
+        marginVertical: 8,
+      },
+    };
+
+    return baseStyles;
+  };
+
   const renderMessage = (message: ChatMessage) => {
     const isUser = message.type === 'user';
     const isSystem = message.type === 'system';
@@ -697,18 +851,19 @@ export function IntentScreen() {
                   ? 'border border-green-500/30 bg-green-500/10'
                   : 'border border-dark-border bg-dark-card'
           }`}>
-          <Text
-            className={`${
-              isUser
-                ? 'text-white'
-                : isSystem
-                  ? 'text-gray-300'
-                  : isPortfolio
-                    ? 'text-green-100'
-                    : 'text-white'
-            }`}>
-            {message.content}
-          </Text>
+          {/* Render message content with Markdown */}
+          {isUser ? (
+            <Text className="text-white">{message.content}</Text>
+          ) : (
+            <Markdown
+              style={getMarkdownStyles(message.type)}
+              onLinkPress={(url) => {
+                Linking.openURL(url);
+                return true;
+              }}>
+              {message.content}
+            </Markdown>
+          )}
 
           {/* Special rendering for quotes and transactions */}
           {message.data?.signature && (
@@ -721,6 +876,50 @@ export function IntentScreen() {
               className="mt-3 rounded-lg bg-primary/20 p-3">
               <Text className="text-center font-medium text-primary">View on Solscan 🔍</Text>
             </TouchableOpacity>
+          )}
+
+          {/* Enhanced data visualization for portfolio and quotes */}
+          {message.data?.quote && (
+            <View className="mt-3 rounded-lg bg-primary/10 p-3">
+              <View className="flex-row items-center justify-between">
+                <Text className="text-sm text-gray-300">Expected Output</Text>
+                <Text className="font-bold text-primary">
+                  {message.data.quote.expectedAmountOut.toFixed(6)} {message.data.toToken?.symbol}
+                </Text>
+              </View>
+              <View className="mt-2 flex-row items-center justify-between">
+                <Text className="text-sm text-gray-300">Price Impact</Text>
+                <Text
+                  className={`font-medium ${message.data.quote.priceImpact > 5 ? 'text-red-400' : 'text-green-400'}`}>
+                  {message.data.quote.priceImpact.toFixed(2)}%
+                </Text>
+              </View>
+            </View>
+          )}
+
+          {message.data?.portfolioAnalysis && (
+            <View className="mt-3 rounded-lg bg-green-500/10 p-3">
+              <Text className="mb-2 font-bold text-green-400">📊 Quick Stats</Text>
+              <View className="flex-row items-center justify-between">
+                <Text className="text-sm text-green-200">Risk Level</Text>
+                <Text
+                  className={`font-medium ${
+                    message.data.portfolioAnalysis.riskLevel === 'high'
+                      ? 'text-red-400'
+                      : message.data.portfolioAnalysis.riskLevel === 'medium'
+                        ? 'text-yellow-400'
+                        : 'text-green-400'
+                  }`}>
+                  {message.data.portfolioAnalysis.riskLevel.toUpperCase()}
+                </Text>
+              </View>
+              <View className="mt-1 flex-row items-center justify-between">
+                <Text className="text-sm text-green-200">Holdings</Text>
+                <Text className="font-medium text-green-400">
+                  {message.data.portfolioAnalysis.topHoldings?.length || 0} tokens
+                </Text>
+              </View>
+            </View>
           )}
 
           <Text

@@ -6,9 +6,10 @@
 import Groq from 'groq-sdk';
 import { IntentToken } from './intent-api-service';
 import { TurnkeyTokenBalance } from './turnkey-solana-service';
+import { GROQ_API_KEY } from '@env';
 
 const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY || '',
+  apiKey: GROQ_API_KEY || '',
 });
 
 export interface SwapIntent {
@@ -53,7 +54,7 @@ CORE RULES:
 1. NEVER make up or mock data - only use real information provided
 2. NEVER execute actions - only analyze and suggest
 3. Be honest about limitations and uncertainties
-4. Provide clear, actionable responses
+4. Provide clear, actionable responses with proper markdown formatting
 5. Always validate token symbols against provided lists
 6. Maintain conversation context for better user experience
 
@@ -69,7 +70,8 @@ RESPONSE FORMAT:
 - Always respond with valid JSON
 - Include reasoning for transparency
 - Provide helpful suggestions
-- Be concise but informative`;
+- Be concise but informative
+- Use markdown formatting for better readability (headers, bold, lists, etc.)`;
   }
 
   /**
@@ -374,7 +376,7 @@ Respond with JSON:
     } = {}
   ): Promise<string> {
     try {
-      const { temperature = 0.1, maxTokens = 1000, model = 'llama-3.1-70b-versatile' } = options;
+      const { temperature = 0.1, maxTokens = 1000, model = 'llama3-8b-8192' } = options;
 
       const params = {
         messages: messages as Groq.Chat.ChatCompletionMessageParam[],
