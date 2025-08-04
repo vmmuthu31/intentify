@@ -636,3 +636,6 @@ export const intentFiSDK = IntentFiSDK.getInstance();
 export const intentFiMobile = new IntentFiMobile();
 
 // Export types for TypeScript usage are handled by the wildcard exports above
+
+// Export Groq AI service
+export { groqAIService } from './groq-ai-service';

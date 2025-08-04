@@ -10,21 +10,25 @@ import {
   Linking,
   KeyboardAvoidingView,
   Platform,
+  Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import Animated, { FadeInUp, FadeInLeft, BounceIn } from 'react-native-reanimated';
+import Animated, { FadeInUp, FadeInLeft, BounceIn, SlideInRight } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 
 // Import services
 import { useTurnkeyAuth } from '../providers/TurnkeyAuthProvider';
 import { turnkeySolanaService, TurnkeyTokenBalance } from '../services/turnkey-solana-service';
 import { intentApiService, IntentToken, QuoteResponse } from '../services/intent-api-service';
+import { groqAIService, SwapIntent, PortfolioAnalysis } from '../services/groq-ai-service';
+
+const { width } = Dimensions.get('window');
 
 interface ChatMessage {
   id: string;
-  type: 'user' | 'bot' | 'system';
+  type: 'user' | 'bot' | 'system' | 'portfolio';
   content: string;
   timestamp: Date;
   data?: any;
@@ -47,6 +51,8 @@ export function IntentScreen() {
   const [availableTokens, setAvailableTokens] = useState<IntentToken[]>([]);
   const [userTokens, setUserTokens] = useState<TurnkeyTokenBalance[]>([]);
   const [swapState, setSwapState] = useState<SwapState>({ step: 'idle' });
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [portfolioAnalysis, setPortfolioAnalysis] = useState<PortfolioAnalysis | null>(null);
   const scrollViewRef = useRef<ScrollView>(null);
 
   useEffect(() => {
@@ -71,11 +77,31 @@ export function IntentScreen() {
 
       if (portfolioData.wallets.length > 0) {
         setUserTokens(portfolioData.allTokenBalances);
+
+        // Generate AI portfolio analysis
+        try {
+          const analysis = await groqAIService.analyzePortfolio(portfolioData.allTokenBalances);
+          setPortfolioAnalysis(analysis);
+        } catch (error) {
+          console.log('Portfolio analysis failed:', error);
+        }
       }
 
-      // Add welcome message
+      // Generate smart suggestions
+      const welcomeSuggestions = await groqAIService.generateSuggestions(
+        portfolioData.allTokenBalances || [],
+        tokensResponse.tokens || [],
+        'welcome'
+      );
+      setSuggestions(welcomeSuggestions);
+
+      // Add welcome message with portfolio summary
+      const totalValue =
+        portfolioData.allTokenBalances?.reduce((sum, token) => sum + (token.value || 0), 0) || 0;
+      const tokenCount = portfolioData.allTokenBalances?.filter((t) => t.uiAmount > 0).length || 0;
+
       addBotMessage(
-        `👋 Welcome to IntentFI! I'm here to help you swap tokens on Solana.\n\n💡 Just tell me what you want to do, like:\n• "Swap 1 SOL to USDC"\n• "Exchange MELANIA for SOL"\n• "I want to swap tokens"\n\nWhat would you like to do today?`
+        `👋 Welcome to IntentFI! I'm your AI-powered DeFi assistant.\n\n💰 **Portfolio Summary:**\n• Total Value: $${totalValue.toFixed(2)}\n• Active Tokens: ${tokenCount}\n• Network: Solana Mainnet\n\n🚀 I can help you swap tokens, analyze your portfolio, and provide personalized recommendations!\n\nWhat would you like to do?`
       );
     } catch (error) {
       console.error('❌ Failed to initialize chat:', error);
@@ -111,6 +137,10 @@ export function IntentScreen() {
     addMessage({ type: 'system', content });
   };
 
+  const addPortfolioMessage = (content: string, data?: any) => {
+    addMessage({ type: 'portfolio', content, data });
+  };
+
   const handleSendMessage = async () => {
     if (!inputText.trim() || isLoading) return;
 
@@ -125,61 +155,123 @@ export function IntentScreen() {
     setIsLoading(true);
 
     try {
-      const lowerInput = input.toLowerCase();
+      // Use AI to parse user intent
+      const intent = await groqAIService.parseSwapIntent(input, userTokens, availableTokens);
 
-      // Check for swap intent
-      if (
-        lowerInput.includes('swap') ||
-        lowerInput.includes('exchange') ||
-        lowerInput.includes('trade')
-      ) {
-        await handleSwapIntent(input);
-      } else if (swapState.step !== 'idle') {
-        await handleSwapFlow(input);
-      } else {
-        // General help
-        addBotMessage(
-          `I can help you swap tokens! Here are some things you can say:\n\n• "Swap 1 SOL to USDC"\n• "Exchange 100 MELANIA for SOL"\n• "I want to swap tokens"\n\nTry one of these or tell me what tokens you'd like to swap!`
-        );
+      // Update suggestions based on intent
+      setSuggestions(intent.suggestions || []);
+
+      switch (intent.action) {
+        case 'swap':
+          await handleAISwapIntent(intent);
+          break;
+        case 'portfolio':
+          await handlePortfolioRequest();
+          break;
+        case 'help':
+          await handleHelpRequest();
+          break;
+        default:
+          if (swapState.step !== 'idle') {
+            await handleSwapFlow(input);
+          } else {
+            await handleGeneralQuery(input);
+          }
       }
     } catch (error) {
       console.error('❌ Error processing input:', error);
       addBotMessage('❌ Sorry, I encountered an error. Please try again.');
+
+      // Generate error suggestions
+      const errorSuggestions = await groqAIService.generateSuggestions(
+        userTokens,
+        availableTokens,
+        'error'
+      );
+      setSuggestions(errorSuggestions);
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleSwapIntent = async (input: string) => {
-    // Parse swap intent from natural language
-    const swapPattern = /swap|exchange|trade/i;
-    const amountPattern = /(\d+(?:\.\d+)?)\s*([a-zA-Z]+)/gi;
-    const toPattern = /(?:to|for|into)\s+([a-zA-Z]+)/i;
+  const handleAISwapIntent = async (intent: SwapIntent) => {
+    if (intent.fromToken && intent.toToken && intent.amount) {
+      // Complete swap instruction
+      await startSwapWithTokens(intent.fromToken, intent.toToken, intent.amount.toString());
+    } else if (intent.fromToken && intent.amount) {
+      // Partial instruction - need to token
+      await startSwapFlow(intent.fromToken, intent.amount.toString());
+    } else if (intent.fromToken) {
+      // Only from token specified
+      await startSwapFlow(intent.fromToken);
+    } else {
+      // General swap request
+      await startSwapFlow();
+    }
+  };
 
-    if (!swapPattern.test(input)) {
-      addBotMessage('I can help you swap tokens! What would you like to swap?');
+  const handlePortfolioRequest = async () => {
+    if (userTokens.length === 0) {
+      addBotMessage("❌ You don't have any tokens in your wallet. Please fund your wallet first.");
       return;
     }
 
-    // Try to extract amount and tokens
-    const matches = [...input.matchAll(amountPattern)];
-    const toMatch = input.match(toPattern);
+    const totalValue = userTokens.reduce((sum, token) => sum + (token.value || 0), 0);
+    const activeTokens = userTokens.filter((token) => token.uiAmount > 0);
 
-    if (matches.length > 0) {
-      const amount = matches[0][1];
-      const fromSymbol = matches[0][2].toUpperCase();
-      const toSymbol = toMatch ? toMatch[1].toUpperCase() : null;
+    // Create portfolio summary
+    const portfolioSummary = activeTokens
+      .sort((a, b) => (b.value || 0) - (a.value || 0))
+      .slice(0, 8) // Show top 8 tokens
+      .map((token) => {
+        const percentage = ((token.value || 0) / totalValue) * 100;
+        return `• ${token.symbol}: ${token.uiAmount.toFixed(4)} (${percentage.toFixed(1)}% �� $${(token.value || 0).toFixed(2)})`;
+      })
+      .join('\n');
 
-      if (toSymbol) {
-        // Complete swap instruction
-        await startSwapWithTokens(fromSymbol, toSymbol, amount);
-      } else {
-        // Partial instruction
-        await startSwapFlow(fromSymbol, amount);
-      }
+    addPortfolioMessage(
+      `📊 **Your Portfolio Analysis**\n\n💰 **Total Value:** $${totalValue.toFixed(2)}\n🪙 **Active Tokens:** ${activeTokens.length}\n\n**Top Holdings:**\n${portfolioSummary}`,
+      { portfolioAnalysis, totalValue, activeTokens }
+    );
+
+    // Add AI insights if available
+    if (portfolioAnalysis) {
+      addBotMessage(
+        `🤖 **AI Insights:**\n\n${portfolioAnalysis.recommendations
+          .slice(0, 3)
+          .map((rec) => `• ${rec}`)
+          .join('\n')}\n\n📈 **Risk Level:** ${portfolioAnalysis.riskLevel.toUpperCase()}`
+      );
+    }
+
+    // Generate portfolio-specific suggestions
+    const portfolioSuggestions = await groqAIService.generateSuggestions(
+      userTokens,
+      availableTokens,
+      'portfolio'
+    );
+    setSuggestions(portfolioSuggestions);
+  };
+
+  const handleHelpRequest = async () => {
+    addBotMessage(
+      `🤖 **I'm here to help!** Here's what I can do:\n\n🔄 **Token Swaps:**\n• "Swap 1 SOL to USDC"\n• "Exchange 100 MELANIA for SOL"\n• "Trade my BONK for USDC"\n\n📊 **Portfolio Analysis:**\n• "Show my portfolio"\n• "Analyze my holdings"\n• "Check my balances"\n\n💡 **Smart Features:**\n• Natural language processing\n• Real-time quotes\n• Portfolio insights\n• Risk analysis\n\nJust tell me what you want to do in plain English!`
+    );
+  };
+
+  const handleGeneralQuery = async (input: string) => {
+    const lowerInput = input.toLowerCase();
+
+    if (lowerInput.includes('balance') || lowerInput.includes('token')) {
+      await handlePortfolioRequest();
+    } else if (lowerInput.includes('price') || lowerInput.includes('value')) {
+      addBotMessage(
+        '💰 I can help you check token prices through swaps! Try asking "What can I get for 1 SOL?" or start a swap to see current rates.'
+      );
     } else {
-      // No specific tokens mentioned
-      await startSwapFlow();
+      addBotMessage(
+        `🤔 I'm not sure what you're looking for. Here are some things you can try:\n\n• "Swap [amount] [token] to [token]"\n• "Show my portfolio"\n• "What tokens can I swap?"\n• "Help me trade tokens"\n\nWhat would you like to do?`
+      );
     }
   };
 
@@ -190,15 +282,15 @@ export function IntentScreen() {
 
     if (!fromToken) {
       addBotMessage(
-        `❌ I couldn't find the token "${fromSymbol}". Let me show you available tokens:`
+        `❌ I couldn't find the token "${fromSymbol}". Let me show you your available tokens:`
       );
-      showAvailableTokens('from');
+      showUserTokens();
       return;
     }
 
     if (!toToken) {
       addBotMessage(
-        `❌ I couldn't find the token "${toSymbol}". Let me show you available tokens:`
+        `❌ I couldn't find the token "${toSymbol}". Here are the tokens you can swap to:`
       );
       showAvailableTokens('to');
       return;
@@ -210,8 +302,19 @@ export function IntentScreen() {
 
     if (!userBalance || userBalance.uiAmount < requiredAmount) {
       addBotMessage(
-        `❌ Insufficient balance!\n\nYou need ${amount} ${fromSymbol} but you only have ${userBalance ? userBalance.uiAmount.toFixed(4) : '0'} ${fromSymbol}.\n\nPlease enter a smaller amount or choose a different token.`
+        `❌ **Insufficient Balance**\n\nYou need ${amount} ${fromSymbol} but you only have ${userBalance ? userBalance.uiAmount.toFixed(4) : '0'} ${fromSymbol}.\n\n💡 Try a smaller amount or choose a different token.`
       );
+
+      // Show available balance for this token
+      if (userBalance) {
+        const maxAmount = (userBalance.uiAmount * 0.95).toFixed(4); // Leave 5% buffer
+        setSuggestions([
+          `Swap ${maxAmount} ${fromSymbol} to ${toSymbol}`,
+          'Show my available tokens',
+          'Check my portfolio',
+          'Help me swap tokens',
+        ]);
+      }
       return;
     }
 
@@ -225,16 +328,16 @@ export function IntentScreen() {
       if (fromToken) {
         setSwapState({ step: 'selecting_to', fromToken, amount });
         addBotMessage(
-          `Great! You want to swap ${amount || 'some'} ${fromSymbol}. What token would you like to receive?`
+          `✅ Great! You want to swap ${amount || 'some'} ${fromSymbol}.\n\nWhat token would you like to receive?`
         );
         showAvailableTokens('to');
       } else {
-        addBotMessage(`❌ I couldn't find "${fromSymbol}". Let me show you your available tokens:`);
+        addBotMessage(`❌ I couldn't find "${fromSymbol}". Here are your available tokens:`);
         showUserTokens();
       }
     } else {
       setSwapState({ step: 'selecting_from' });
-      addBotMessage("Perfect! Let's start a swap. Which token would you like to swap FROM?");
+      addBotMessage("🚀 Let's start a swap! Which token would you like to swap FROM?");
       showUserTokens();
     }
   };
@@ -274,7 +377,7 @@ export function IntentScreen() {
     }
 
     setSwapState((prev) => ({ ...prev, step: 'selecting_to', fromToken: token }));
-    addBotMessage(`Great! You selected ${token.symbol}. What token would you like to receive?`);
+    addBotMessage(`✅ Selected ${token.symbol}! What token would you like to receive?`);
     showAvailableTokens('to');
   };
 
@@ -297,9 +400,19 @@ export function IntentScreen() {
     setSwapState((prev) => ({ ...prev, step: 'entering_amount', toToken: token }));
 
     const userBalance = getUserTokenBalance(swapState.fromToken!.symbol);
+    const maxAmount = (userBalance!.uiAmount * 0.95).toFixed(4);
+
     addBotMessage(
-      `Perfect! You want to swap ${swapState.fromToken!.symbol} → ${token.symbol}\n\nYou have ${userBalance?.uiAmount.toFixed(4)} ${swapState.fromToken!.symbol} available.\n\nHow much ${swapState.fromToken!.symbol} would you like to swap?`
+      `✅ Perfect! ${swapState.fromToken!.symbol} → ${token.symbol}\n\n💰 Available: ${userBalance?.uiAmount.toFixed(4)} ${swapState.fromToken!.symbol}\n\nHow much ${swapState.fromToken!.symbol} would you like to swap?`
     );
+
+    // Set amount suggestions
+    setSuggestions([
+      `${maxAmount}`,
+      `${(userBalance!.uiAmount * 0.5).toFixed(4)}`,
+      `${(userBalance!.uiAmount * 0.25).toFixed(4)}`,
+      '1',
+    ]);
   };
 
   const handleAmountEntry = async (input: string) => {
@@ -328,7 +441,7 @@ export function IntentScreen() {
   ) => {
     try {
       addBotMessage(
-        `🔄 Getting the best quote for ${amount} ${fromToken.symbol} → ${toToken.symbol}...`
+        `🔄 **Getting Quote**\n\nFinding the best rate for ${amount} ${fromToken.symbol} → ${toToken.symbol}...`
       );
 
       const userOrgId = intentApiService.getUserOrganizationId();
@@ -373,13 +486,16 @@ export function IntentScreen() {
         toToken,
       }));
 
-      const priceImpact =
-        quote.priceImpact > 0 ? ` (${quote.priceImpact.toFixed(2)}% price impact)` : '';
+      const priceImpact = quote.priceImpact > 0 ? ` (${quote.priceImpact.toFixed(2)}% impact)` : '';
+      const rate = quote.price.toFixed(6);
 
       addBotMessage(
-        `✅ Quote received!\n\n📊 **Swap Details:**\n• From: ${amount} ${fromToken.symbol}\n• To: ~${quote.expectedAmountOut.toFixed(6)} ${toToken.symbol}\n• Rate: 1 ${fromToken.symbol} = ${quote.price.toFixed(6)} ${toToken.symbol}${priceImpact}\n• Route: ${quote.meta.title}\n• ETA: ${quote.clientEta}\n\n💡 This is the best available rate!\n\n**Ready to execute this swap?**`,
+        `✅ **Quote Ready!**\n\n📊 **Swap Details:**\n• From: ${amount} ${fromToken.symbol}\n• To: ~${quote.expectedAmountOut.toFixed(6)} ${toToken.symbol}\n• Rate: 1 ${fromToken.symbol} = ${rate} ${toToken.symbol}${priceImpact}\n• Route: ${quote.meta.title}\n• ETA: ${quote.clientEta}\n\n🚀 **Ready to execute this swap?**`,
         { quote, fromToken, toToken, amount }
       );
+
+      // Set confirmation suggestions
+      setSuggestions(['Yes, execute swap', 'No, cancel', 'Get new quote', 'Change amount']);
     } catch (error) {
       console.error('❌ Failed to get quote:', error);
       addBotMessage('❌ Failed to get quote. Please try again.');
@@ -399,6 +515,14 @@ export function IntentScreen() {
     } else if (lowerInput.includes('no') || lowerInput.includes('cancel')) {
       setSwapState({ step: 'idle' });
       addBotMessage('❌ Swap cancelled. What else can I help you with?');
+
+      // Generate post-cancel suggestions
+      const suggestions = await groqAIService.generateSuggestions(
+        userTokens,
+        availableTokens,
+        'welcome'
+      );
+      setSuggestions(suggestions);
     } else {
       addBotMessage('Please type "yes" to confirm the swap or "no" to cancel.');
     }
@@ -407,7 +531,7 @@ export function IntentScreen() {
   const executeSwap = async () => {
     try {
       setSwapState((prev) => ({ ...prev, step: 'executing' }));
-      addBotMessage('🚀 Executing your swap...');
+      addBotMessage('🚀 **Executing Swap**\n\nProcessing your transaction...');
 
       const userOrgId = intentApiService.getUserOrganizationId();
       const portfolioData = await turnkeySolanaService.getPortfolioData();
@@ -430,7 +554,7 @@ export function IntentScreen() {
 
       if (swapResponse.success && swapResponse.result.success) {
         addBotMessage(
-          `🎉 **Swap Executed Successfully!**\n\n✅ Transaction: ${swapResponse.result.signature.slice(0, 8)}...${swapResponse.result.signature.slice(-8)}\n\n🔍 You can track your transaction on Solscan.\n\n💡 Your tokens should arrive shortly!`,
+          `🎉 **Swap Successful!**\n\n✅ **Transaction:** ${swapResponse.result.signature.slice(0, 8)}...${swapResponse.result.signature.slice(-8)}\n\n🔍 Track on Solscan\n💫 Tokens will arrive shortly!`,
           {
             signature: swapResponse.result.signature,
             explorerUrl: swapResponse.result.explorerUrl,
@@ -439,6 +563,14 @@ export function IntentScreen() {
 
         // Reset state
         setSwapState({ step: 'idle' });
+
+        // Generate post-swap suggestions
+        const afterSwapSuggestions = await groqAIService.generateSuggestions(
+          userTokens,
+          availableTokens,
+          'after_swap'
+        );
+        setSuggestions(afterSwapSuggestions);
 
         // Refresh user tokens
         setTimeout(async () => {
@@ -484,8 +616,18 @@ export function IntentScreen() {
       return;
     }
 
-    const tokenList = userTokens
-      .filter((token) => token.uiAmount > 0)
+    const activeTokens = userTokens.filter((token) => token.uiAmount > 0);
+
+    if (activeTokens.length === 0) {
+      addBotMessage(
+        "❌ You don't have any tokens with positive balances. Please fund your wallet first."
+      );
+      return;
+    }
+
+    const tokenList = activeTokens
+      .sort((a, b) => (b.value || 0) - (a.value || 0))
+      .slice(0, 8) // Show top 8 tokens
       .map(
         (token) =>
           `• ${token.symbol}: ${token.uiAmount.toFixed(4)} (≈$${(token.value || 0).toFixed(2)})`
@@ -493,29 +635,43 @@ export function IntentScreen() {
       .join('\n');
 
     addBotMessage(
-      `💰 **Your Available Tokens:**\n\n${tokenList}\n\nJust type the symbol of the token you want to swap (e.g., "SOL" or "USDC")`
+      `💰 **Your Available Tokens:**\n\n${tokenList}\n\n💡 Just type the symbol (e.g., "SOL" or "USDC")`
     );
+
+    // Set token suggestions
+    setSuggestions(activeTokens.slice(0, 4).map((token) => token.symbol));
   };
 
   const showAvailableTokens = (type: 'from' | 'to') => {
-    const tokenList = availableTokens
-      .slice(0, 10) // Show top 10
-      .map((token) => `• ${token.symbol}: ${token.name}`)
+    const popularTokens = ['USDC', 'MELANIA', 'BONK', 'WIF', 'POPCAT', 'FIDA', 'RAY', 'ORCA'];
+    const availablePopular = popularTokens.filter((symbol) =>
+      availableTokens.some((token) => token.symbol === symbol)
+    );
+
+    const tokenList = availablePopular
+      .map((symbol) => {
+        const token = availableTokens.find((t) => t.symbol === symbol);
+        return `• ${symbol}: ${token?.name || symbol}`;
+      })
       .join('\n');
 
     addBotMessage(
-      `🪙 **Available Tokens ${type === 'to' ? 'to Receive' : 'to Swap'}:**\n\n${tokenList}\n• SOL: Solana\n\nJust type the symbol (e.g., "MELANIA" or "SOL")`
+      `🪙 **Popular Tokens ${type === 'to' ? 'to Receive' : 'to Swap'}:**\n\n${tokenList}\n• SOL: Solana\n\n💡 Just type the symbol (e.g., "MELANIA" or "SOL")`
     );
+
+    // Set token suggestions
+    setSuggestions([...availablePopular.slice(0, 4), 'SOL']);
   };
 
-  const handleQuickAction = (action: string) => {
+  const handleQuickAction = async (action: string) => {
     setInputText(action);
-    handleSendMessage();
+    await handleSendMessage();
   };
 
   const renderMessage = (message: ChatMessage) => {
     const isUser = message.type === 'user';
     const isSystem = message.type === 'system';
+    const isPortfolio = message.type === 'portfolio';
 
     return (
       <Animated.View
@@ -523,20 +679,34 @@ export function IntentScreen() {
         entering={FadeInLeft.duration(300)}
         className={`mb-4 flex-row ${isUser ? 'justify-end' : 'justify-start'}`}>
         {!isUser && !isSystem && (
-          <View className="mr-3 h-8 w-8 items-center justify-center rounded-full bg-primary">
-            <Ionicons name="flash" size={16} color="white" />
+          <View
+            className={`mr-3 h-8 w-8 items-center justify-center rounded-full ${
+              isPortfolio ? 'bg-green-500' : 'bg-primary'
+            }`}>
+            <Ionicons name={isPortfolio ? 'pie-chart' : 'flash'} size={16} color="white" />
           </View>
         )}
 
         <View
-          className={`max-w-[80%] rounded-2xl px-4 py-3 ${
+          className={`max-w-[85%] rounded-2xl px-4 py-3 ${
             isUser
               ? 'bg-primary'
               : isSystem
                 ? 'border border-gray-500 bg-gray-600/50'
-                : 'border border-dark-border bg-dark-card'
+                : isPortfolio
+                  ? 'border border-green-500/30 bg-green-500/10'
+                  : 'border border-dark-border bg-dark-card'
           }`}>
-          <Text className={`${isUser ? 'text-white' : isSystem ? 'text-gray-300' : 'text-white'}`}>
+          <Text
+            className={`${
+              isUser
+                ? 'text-white'
+                : isSystem
+                  ? 'text-gray-300'
+                  : isPortfolio
+                    ? 'text-green-100'
+                    : 'text-white'
+            }`}>
             {message.content}
           </Text>
 
@@ -553,7 +723,10 @@ export function IntentScreen() {
             </TouchableOpacity>
           )}
 
-          <Text className={`mt-2 text-xs ${isUser ? 'text-white/70' : 'text-gray-500'}`}>
+          <Text
+            className={`mt-2 text-xs ${
+              isUser ? 'text-white/70' : isPortfolio ? 'text-green-300/70' : 'text-gray-500'
+            }`}>
             {message.timestamp.toLocaleTimeString()}
           </Text>
         </View>
@@ -592,19 +765,24 @@ export function IntentScreen() {
           className="flex-row items-center justify-between border-b border-dark-border p-4">
           <View>
             <Text className="text-2xl font-bold text-white">Intent Chat</Text>
-            <Text className="text-sm text-gray-400">
-              💬 AI-powered token swaps • Solana Mainnet
-            </Text>
+            <Text className="text-sm text-gray-400">🤖 AI-powered DeFi assistant • Solana</Text>
           </View>
-          <TouchableOpacity
-            onPress={() => {
-              setMessages([]);
-              setSwapState({ step: 'idle' });
-              initializeChat();
-            }}
-            className="p-2">
-            <Ionicons name="refresh" size={24} color="#8E8E93" />
-          </TouchableOpacity>
+          <View className="flex-row space-x-2">
+            <TouchableOpacity
+              onPress={() => handleQuickAction('Show my portfolio')}
+              className="p-2">
+              <Ionicons name="pie-chart" size={24} color="#8E8E93" />
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => {
+                setMessages([]);
+                setSwapState({ step: 'idle' });
+                initializeChat();
+              }}
+              className="p-2">
+              <Ionicons name="refresh" size={24} color="#8E8E93" />
+            </TouchableOpacity>
+          </View>
         </Animated.View>
 
         {/* Chat Messages */}
@@ -622,32 +800,26 @@ export function IntentScreen() {
                 <Ionicons name="flash" size={16} color="white" />
               </View>
               <View className="rounded-2xl border border-dark-border bg-dark-card px-4 py-3">
-                <Text className="text-gray-400">Thinking...</Text>
+                <Text className="text-gray-400">AI is thinking...</Text>
               </View>
             </Animated.View>
           )}
         </ScrollView>
 
-        {/* Quick Actions */}
-        {swapState.step === 'idle' && messages.length > 1 && (
-          <Animated.View entering={FadeInUp.duration(400)} className="px-4 py-2">
+        {/* Smart Suggestions */}
+        {suggestions.length > 0 && swapState.step === 'idle' && (
+          <Animated.View entering={SlideInRight.duration(400)} className="px-4 py-2">
+            <Text className="mb-2 text-xs font-medium text-gray-400">💡 SUGGESTIONS</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              <View className="flex-row space-x-3">
-                <TouchableOpacity
-                  onPress={() => handleQuickAction('Swap SOL to USDC')}
-                  className="rounded-full bg-primary/20 px-4 py-2">
-                  <Text className="font-medium text-primary">Swap SOL to USDC</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={() => handleQuickAction('Show my tokens')}
-                  className="rounded-full bg-primary/20 px-4 py-2">
-                  <Text className="font-medium text-primary">Show my tokens</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={() => handleQuickAction('Swap MELANIA for SOL')}
-                  className="rounded-full bg-primary/20 px-4 py-2">
-                  <Text className="font-medium text-primary">Swap MELANIA</Text>
-                </TouchableOpacity>
+              <View className="flex-row space-x-2">
+                {suggestions.map((suggestion, index) => (
+                  <TouchableOpacity
+                    key={index}
+                    onPress={() => handleQuickAction(suggestion)}
+                    className="rounded-full bg-primary/20 px-3 py-2">
+                    <Text className="text-sm font-medium text-primary">{suggestion}</Text>
+                  </TouchableOpacity>
+                ))}
               </View>
             </ScrollView>
           </Animated.View>
@@ -670,7 +842,7 @@ export function IntentScreen() {
                       ? 'Enter amount...'
                       : swapState.step === 'confirming'
                         ? 'Type "yes" to confirm...'
-                        : 'Type your message...'
+                        : 'Ask me anything about your tokens...'
               }
               placeholderTextColor="#8E8E93"
               className="flex-1 text-white"
