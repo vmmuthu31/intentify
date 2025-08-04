@@ -1,4 +1,4 @@
-import { GOLDRUSH_API_KEY } from '@env';
+import { GOLDRUSH_API_KEY, HELIUS_API_KEY } from '@env';
 
 export interface GoldRushTokenBalance {
   contract_decimals: number;
@@ -119,6 +119,7 @@ class GoldRushService {
   private static instance: GoldRushService;
   private readonly baseUrl = 'https://api.covalenthq.com/v1';
   private readonly apiKey = GOLDRUSH_API_KEY;
+  private readonly heliusapiKey = HELIUS_API_KEY;
   private cache: Map<string, { data: ProcessedWalletData; timestamp: number }> = new Map();
   private readonly cacheTimeout = 5 * 60 * 1000; // 5 minutes
 
@@ -158,7 +159,7 @@ class GoldRushService {
       // Fetch both balances and transactions in parallel
       const [balancesData, transactionsData] = await Promise.allSettled([
         this.fetchWalletBalances(address),
-        this.fetchWalletTransactions(address, 3), // Get last 3 transactions
+        this.fetchWalletTransactions(address, 5), // Get last 5 transactions
       ]);
 
       let processedData: ProcessedWalletData;
@@ -246,37 +247,44 @@ class GoldRushService {
   /**
    * Fetch wallet transactions from GoldRush API
    */
-  private async fetchWalletTransactions(
-    address: string,
-    limit: number = 3
-  ): Promise<GoldRushTransaction[]> {
-    // Solana mainnet chain ID is 1399811149 in Covalent
-    const chainId = 1399811149;
-    const url = `${this.baseUrl}/${chainId}/address/${address}/transactions_v2/?page-size=${limit}`;
+  private async fetchWalletTransactions(address: string, limit: number = 5): Promise<any[]> {
+    try {
+      const heliusUrl = `https://api.helius.xyz/v0/addresses/${address}/transactions?limit=${limit}&api-key=${this.heliusapiKey}`;
 
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-    });
+      const response = await fetch(heliusUrl, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
 
-    if (!response.ok) {
-      throw new Error(`GoldRush transactions API error: ${response.status} ${response.statusText}`);
+      if (!response.ok) {
+        console.log(`❌ Helius API error: ${response.status} ${response.statusText}`);
+        return [];
+      }
+
+      const txs: any[] = await response.json();
+
+      const parsed = txs.map((tx) => ({
+        signature: tx.signature,
+        slot: tx.slot,
+        timestamp: tx.timestamp,
+        fee: tx.fee,
+        type: tx.type,
+        source: tx.source,
+        description: tx.description,
+        feePayer: tx.feePayer,
+        tokenTransfers: tx.tokenTransfers || [],
+        nativeTransfers: tx.nativeTransfers || [],
+        accountData: tx.accountData || [],
+      }));
+
+      console.log(`✅ Successfully fetched ${parsed.length} transactions from Helius`);
+      return parsed;
+    } catch (error) {
+      console.log(`⚠️ Failed to fetch transactions from Helius: ${(error as Error).message}`);
+      return [];
     }
-
-    const result: {
-      data: GoldRushTransactionsResponse;
-      error: boolean;
-      error_message: string | null;
-    } = await response.json();
-
-    if (result.error) {
-      throw new Error(`GoldRush transactions API error: ${result.error_message}`);
-    }
-
-    return result.data.items || [];
   }
 
   /**
