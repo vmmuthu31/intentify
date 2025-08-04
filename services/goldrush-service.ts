@@ -53,11 +53,65 @@ export interface ProcessedTokenBalance {
   logoUrl: string;
 }
 
+export interface GoldRushTransaction {
+  block_signed_at: string;
+  block_height: number;
+  tx_hash: string;
+  tx_offset: number;
+  successful: boolean;
+  from_address: string;
+  from_address_label: string | null;
+  to_address: string;
+  to_address_label: string | null;
+  value: string;
+  value_quote: number;
+  gas_offered: number;
+  gas_spent: number;
+  gas_price: number;
+  fees_paid: string;
+  gas_quote: number;
+  gas_quote_rate: number;
+  log_events: any[];
+}
+
+export interface GoldRushTransactionsResponse {
+  address: string;
+  updated_at: string;
+  next_update_at: string;
+  quote_currency: string;
+  chain_id: number;
+  chain_name: string;
+  items: GoldRushTransaction[];
+  pagination: {
+    has_more: boolean;
+    page_number: number;
+    page_size: number;
+    total_count: number;
+  };
+}
+
+export interface ProcessedTransaction {
+  hash: string;
+  timestamp: string;
+  blockHeight: number;
+  successful: boolean;
+  fromAddress: string;
+  toAddress: string;
+  value: number;
+  valueUSD: number;
+  gasUsed: number;
+  gasFee: number;
+  gasFeeUSD: number;
+  type: 'sent' | 'received' | 'swap' | 'unknown';
+  description: string;
+}
+
 export interface ProcessedWalletData {
   address: string;
   totalValue: number;
   totalValueChange24h: number;
   tokenBalances: ProcessedTokenBalance[];
+  recentTransactions: ProcessedTransaction[];
   lastUpdated: string;
 }
 
@@ -101,30 +155,38 @@ class GoldRushService {
         throw new Error('GoldRush API key not configured');
       }
 
-      // Solana mainnet chain ID is 1399811149 in Covalent
-      const chainId = 1399811149;
-      const url = `${this.baseUrl}/${chainId}/address/${address}/balances_v2/`;
+      // Fetch both balances and transactions in parallel
+      const [balancesData, transactionsData] = await Promise.allSettled([
+        this.fetchWalletBalances(address),
+        this.fetchWalletTransactions(address, 3), // Get last 3 transactions
+      ]);
 
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${this.apiKey}`,
-          'Content-Type': 'application/json',
-        },
-      });
+      let processedData: ProcessedWalletData;
 
-      if (!response.ok) {
-        throw new Error(`GoldRush API error: ${response.status} ${response.statusText}`);
+      if (balancesData.status === 'fulfilled') {
+        processedData = this.processWalletData(balancesData.value);
+      } else {
+        console.error('❌ Failed to fetch balances:', balancesData.reason);
+        processedData = {
+          address,
+          totalValue: 0,
+          totalValueChange24h: 0,
+          tokenBalances: [],
+          recentTransactions: [],
+          lastUpdated: new Date().toISOString(),
+        };
       }
 
-      const result: GoldRushResponse = await response.json();
-
-      if (result.error) {
-        throw new Error(`GoldRush API error: ${result.error_message}`);
+      // Add transactions if available
+      if (transactionsData.status === 'fulfilled') {
+        processedData.recentTransactions = this.processTransactions(
+          transactionsData.value,
+          address
+        );
+      } else {
+        console.error('❌ Failed to fetch transactions:', transactionsData.reason);
+        processedData.recentTransactions = [];
       }
-
-      // Process the data
-      const processedData = this.processWalletData(result.data);
 
       // Cache the result
       this.cache.set(cacheKey, {
@@ -133,12 +195,12 @@ class GoldRushService {
       });
 
       console.log(
-        `✅ GoldRush data fetched: ${processedData.tokenBalances.length} tokens, $${processedData.totalValue.toFixed(2)} total value`
+        `✅ GoldRush data fetched: ${processedData.tokenBalances.length} tokens, ${processedData.recentTransactions.length} transactions, ${processedData.totalValue.toFixed(2)} total value`
       );
 
       return processedData;
     } catch (error) {
-      console.error('❌ Failed to fetch GoldRush wallet balances:', error);
+      console.error('❌ Failed to fetch GoldRush wallet data:', error);
 
       // Return empty data instead of throwing to prevent app crash
       return {
@@ -146,9 +208,136 @@ class GoldRushService {
         totalValue: 0,
         totalValueChange24h: 0,
         tokenBalances: [],
+        recentTransactions: [],
         lastUpdated: new Date().toISOString(),
       };
     }
+  }
+
+  /**
+   * Fetch wallet balances from GoldRush API
+   */
+  private async fetchWalletBalances(address: string): Promise<GoldRushWalletBalance> {
+    // Solana mainnet chain ID is 1399811149 in Covalent
+    const chainId = 1399811149;
+    const url = `${this.baseUrl}/${chainId}/address/${address}/balances_v2/`;
+
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`GoldRush API error: ${response.status} ${response.statusText}`);
+    }
+
+    const result: GoldRushResponse = await response.json();
+
+    if (result.error) {
+      throw new Error(`GoldRush API error: ${result.error_message}`);
+    }
+
+    return result.data;
+  }
+
+  /**
+   * Fetch wallet transactions from GoldRush API
+   */
+  private async fetchWalletTransactions(
+    address: string,
+    limit: number = 3
+  ): Promise<GoldRushTransaction[]> {
+    // Solana mainnet chain ID is 1399811149 in Covalent
+    const chainId = 1399811149;
+    const url = `${this.baseUrl}/${chainId}/address/${address}/transactions_v2/?page-size=${limit}`;
+
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`GoldRush transactions API error: ${response.status} ${response.statusText}`);
+    }
+
+    const result: {
+      data: GoldRushTransactionsResponse;
+      error: boolean;
+      error_message: string | null;
+    } = await response.json();
+
+    if (result.error) {
+      throw new Error(`GoldRush transactions API error: ${result.error_message}`);
+    }
+
+    return result.data.items || [];
+  }
+
+  /**
+   * Process transactions data
+   */
+  private processTransactions(
+    transactions: GoldRushTransaction[],
+    userAddress: string
+  ): ProcessedTransaction[] {
+    return transactions.map((tx) => {
+      const value = parseFloat(tx.value) / Math.pow(10, 9); // Convert lamports to SOL
+      const gasFee = parseFloat(tx.fees_paid) / Math.pow(10, 9); // Convert lamports to SOL
+
+      // Determine transaction type
+      let type: ProcessedTransaction['type'] = 'unknown';
+      let description = 'Transaction';
+
+      if (tx.from_address.toLowerCase() === userAddress.toLowerCase()) {
+        if (tx.to_address.toLowerCase() === userAddress.toLowerCase()) {
+          type = 'swap';
+          description = 'Token Swap';
+        } else {
+          type = 'sent';
+          description = `Sent to ${tx.to_address.slice(0, 6)}...${tx.to_address.slice(-4)}`;
+        }
+      } else {
+        type = 'received';
+        description = `Received from ${tx.from_address.slice(0, 6)}...${tx.from_address.slice(-4)}`;
+      }
+
+      // Check for common DeFi patterns
+      if (tx.log_events && tx.log_events.length > 0) {
+        // Look for swap-related events
+        const hasSwapEvents = tx.log_events.some(
+          (event: any) =>
+            event.decoded?.name?.toLowerCase().includes('swap') ||
+            event.decoded?.name?.toLowerCase().includes('trade')
+        );
+
+        if (hasSwapEvents) {
+          type = 'swap';
+          description = 'Token Swap';
+        }
+      }
+
+      return {
+        hash: tx.tx_hash,
+        timestamp: tx.block_signed_at,
+        blockHeight: tx.block_height,
+        successful: tx.successful,
+        fromAddress: tx.from_address,
+        toAddress: tx.to_address,
+        value,
+        valueUSD: tx.value_quote || 0,
+        gasUsed: tx.gas_spent,
+        gasFee,
+        gasFeeUSD: tx.gas_quote || 0,
+        type,
+        description,
+      };
+    });
   }
 
   /**
@@ -211,6 +400,7 @@ class GoldRushService {
       totalValue,
       totalValueChange24h,
       tokenBalances,
+      recentTransactions: [], // Will be populated by the main method
       lastUpdated: data.updated_at,
     };
   }
@@ -238,6 +428,7 @@ class GoldRushService {
           totalValueChange24h: 0,
           tokenBalances: [],
           lastUpdated: new Date().toISOString(),
+          recentTransactions: [],
         });
       }
     });

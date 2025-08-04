@@ -524,11 +524,12 @@ Just tell me what you want to do in **plain English**!`
         return;
       }
 
-      // Convert amount to base units
-      const amountInBaseUnits = (parseFloat(amount) * Math.pow(10, fromToken.decimals)).toString();
+      // The API expects amount in display units (not base units)
+      // For example: 0.00001 SOL, not 10000 lamports
+      const amountInDisplayUnits = amount;
 
       const quoteRequest = {
-        amountIn: amountInBaseUnits,
+        amountIn: amountInDisplayUnits,
         fromToken: fromToken.contract,
         toToken:
           toToken.contract === '0x0000000000000000000000000000000000000000'
@@ -628,7 +629,11 @@ Just tell me what you want to do in **plain English**!`
 
       if (swapResponse.success && swapResponse.result.success) {
         addBotMessage(
-          `🎉 **Swap Successful!**\n\n✅ **Transaction:** ${swapResponse.result.signature.slice(0, 8)}...${swapResponse.result.signature.slice(-8)}\n\n🔍 Track on Solscan\n💫 Tokens will arrive shortly!`,
+          `🎉 **Swap Successful!**\n\n✅ **Transaction:** ${
+            swapResponse.result.signature
+              ? `${swapResponse.result.signature.slice(0, 8)}...${swapResponse.result.signature.slice(-8)}`
+              : 'N/A'
+          }\n\n🔍 Track on Solscan\n💫 Tokens will arrive shortly!`,
           {
             signature: swapResponse.result.signature,
             explorerUrl: swapResponse.result.explorerUrl,

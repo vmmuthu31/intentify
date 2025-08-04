@@ -1,6 +1,6 @@
 import { Connection, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { turnkeyAuthService } from './turnkey-auth-service';
-import { goldRushService, ProcessedWalletData } from './goldrush-service';
+import { goldRushService, ProcessedWalletData, ProcessedTransaction } from './goldrush-service';
 
 export interface TurnkeyTokenBalance {
   mint: string;
@@ -24,6 +24,7 @@ export interface TurnkeyWalletData {
   publicKey: PublicKey;
   solBalance: number;
   tokenBalances: TurnkeyTokenBalance[];
+  recentTransactions: ProcessedTransaction[];
   totalValue: number;
   totalValueChange24h: number;
   lastUpdated: string;
@@ -36,6 +37,7 @@ export interface TurnkeyPortfolioData {
   totalPortfolioValue: number;
   totalValueChange24h: number;
   allTokenBalances: TurnkeyTokenBalance[];
+  recentTransactions: ProcessedTransaction[];
   lastUpdated: string;
 }
 
@@ -159,6 +161,7 @@ class TurnkeySolanaService {
       publicKey,
       solBalance,
       tokenBalances,
+      recentTransactions: goldRushData.recentTransactions,
       totalValue: goldRushData.totalValue,
       totalValueChange24h: goldRushData.totalValueChange24h,
       lastUpdated: goldRushData.lastUpdated,
@@ -180,6 +183,7 @@ class TurnkeySolanaService {
           totalPortfolioValue: 0,
           totalValueChange24h: 0,
           allTokenBalances: [],
+          recentTransactions: [],
           lastUpdated: new Date().toISOString(),
         };
       }
@@ -215,10 +219,21 @@ class TurnkeySolanaService {
         return total + (token.value || 0);
       }, 0);
 
+      // Combine recent transactions from all wallets
+      const allRecentTransactions: ProcessedTransaction[] = [];
+      wallets.forEach((wallet) => {
+        allRecentTransactions.push(...wallet.recentTransactions);
+      });
+
+      // Sort transactions by timestamp (newest first) and take the most recent 3
+      const recentTransactions = allRecentTransactions
+        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+        .slice(0, 3);
+
       const lastUpdated = wallets.length > 0 ? wallets[0].lastUpdated : new Date().toISOString();
 
       console.log(
-        `✅ Portfolio compiled with GoldRush: ${wallets.length} wallet(s), $${totalPortfolioValue.toFixed(2)} total value`
+        `✅ Portfolio compiled with GoldRush: ${wallets.length} wallet(s), $${totalPortfolioValue.toFixed(2)} total value, ${recentTransactions.length} recent transactions`
       );
 
       return {
@@ -228,6 +243,7 @@ class TurnkeySolanaService {
         totalPortfolioValue,
         totalValueChange24h,
         allTokenBalances,
+        recentTransactions,
         lastUpdated,
       };
     } catch (error) {

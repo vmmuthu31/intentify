@@ -97,9 +97,10 @@ export interface SwapResponse {
   success: boolean;
   result: {
     success: boolean;
-    signature: string;
-    statusCheckEnabled: boolean;
-    explorerUrl: string;
+    signature?: string;
+    statusCheckEnabled?: boolean;
+    explorerUrl?: string;
+    error?: string;
   };
   addresses: {
     origin: string;
@@ -111,7 +112,7 @@ export interface SwapResponse {
     };
     referrerBps: number;
   };
-  statusTracking: {
+  statusTracking?: {
     enabled: boolean;
     message: string;
     explorerUrl: string;
@@ -184,6 +185,8 @@ class IntentApiService {
    */
   async executeSwap(request: SwapRequest): Promise<SwapResponse> {
     try {
+      console.log('🔄 Sending swap request:', JSON.stringify(request, null, 2));
+      
       const response = await fetch(`${BASE_URL}/api/intent/swap`, {
         method: 'POST',
         headers: {
@@ -192,11 +195,16 @@ class IntentApiService {
         body: JSON.stringify(request),
       });
 
+      console.log('📡 Swap API response status:', response.status, response.statusText);
+
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        const errorText = await response.text();
+        console.error('❌ Swap API error response:', errorText);
+        throw new Error(`HTTP ${response.status}: ${response.statusText} - ${errorText}`);
       }
 
       const data = await response.json();
+      console.log('✅ Swap API response data:', JSON.stringify(data, null, 2));
       return data;
     } catch (error) {
       console.error('❌ Failed to execute swap:', error);
