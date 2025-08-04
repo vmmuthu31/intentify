@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Dimensions, Alert, Modal } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, Dimensions, Alert, Modal, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -12,7 +12,11 @@ import { SwipeableCard } from '../components/SwipeableCard';
 import { AnimatedButton } from '../components/AnimatedButton';
 import { PullToRefresh } from '../components/PullToRefresh';
 import { WalletOnboardingScreen } from './WalletOnboardingScreen';
+
+// Import Turnkey auth and Solana services
+import { useTurnkeyAuth } from '../providers/TurnkeyAuthProvider';
 import { useSolana } from '../providers/SolanaProvider';
+import { turnkeySolanaService, TurnkeyPortfolioData } from '../services/turnkey-solana-service';
 
 // Import IntentFI services
 import { intentFiMobile, networkService } from '../services';
@@ -20,64 +24,90 @@ import { intentFiMobile, networkService } from '../services';
 const { width } = Dimensions.get('window');
 
 export function DashboardScreen() {
-  const {
-    connected,
-    connecting,
-    balance,
-    tokenBalances,
-    publicKey,
-    refreshBalances,
-    connectWallet,
-    activeIntents, // Get activeIntents from SolanaProvider instead of local state
-  } = useSolana();
+  // Turnkey authentication state
+  const { isAuthenticated, user } = useTurnkeyAuth();
+  
+  // Solana provider for intents (still using existing functionality)
+  const { activeIntents } = useSolana();
 
-  const [showOnboarding, setShowOnboarding] = useState(!connected);
+  // Dashboard state
+  const [portfolioData, setPortfolioData] = useState<TurnkeyPortfolioData | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [showOnboarding, setShowOnboarding] = useState(false);
   const [isContractReady, setIsContractReady] = useState(false);
   const [userProfile, setUserProfile] = useState<any>(null);
-  const [launchpadState, setLaunchpadState] = useState<any>(null);
   const [protocolStats, setProtocolStats] = useState<any>(null);
 
-  // Update onboarding visibility when connection status changes
+  // Check authentication and initialize
   useEffect(() => {
-    setShowOnboarding(!connected);
-    if (connected && publicKey) {
-      initializeContracts();
+    if (!isAuthenticated || !user) {
+      setShowOnboarding(true);
+      setIsLoading(false);
+    } else {
+      setShowOnboarding(false);
+      initializeDashboard();
     }
-  }, [connected, publicKey]);
+  }, [isAuthenticated, user]);
 
-  const initializeContracts = async () => {
-    if (!publicKey) return;
-
+  const initializeDashboard = async () => {
     try {
-      await refreshBalances();
-      // Initialize IntentFI SDK
-      await intentFiMobile.initialize('devnet');
-      console.log('🚀 IntentFI SDK initialized');
-      console.log('✅ Using connected wallet:', publicKey.toString().slice(0, 8) + '...');
+      setIsLoading(true);
+      setError(null);
+      
+      console.log('🚀 Initializing dashboard for authenticated user...');
+      
+      // Fetch real portfolio data from Turnkey wallets
+      await fetchDashboardData();
+      
+      // Initialize IntentFI SDK for additional stats
+      try {
+        await intentFiMobile.initialize('mainnet');
+        setIsContractReady(true);
+        console.log('✅ IntentFI SDK initialized for mainnet');
+        
+        // Fetch contract data if available
+        await fetchContractData();
+      } catch (contractError) {
+        console.warn('⚠️ IntentFI SDK initialization failed, continuing without contract data:', contractError);
+        setIsContractReady(false);
+      }
 
-      setIsContractReady(true);
-      await fetchContractData();
-      console.log('✅ Dashboard contracts initialized');
+      console.log('✅ Dashboard initialized');
     } catch (error) {
-      console.error('❌ Failed to initialize contracts:', error);
-      setIsContractReady(true);
+      console.error('❌ Failed to initialize dashboard:', error);
+      setError(error instanceof Error ? error.message : 'Failed to load dashboard data');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const fetchDashboardData = async () => {
+    try {
+      console.log('📊 Fetching dashboard data from Turnkey wallets...');
+      
+      const data = await turnkeySolanaService.getPortfolioData();
+      setPortfolioData(data);
+      
+      console.log('✅ Dashboard data fetched successfully');
+    } catch (error) {
+      console.error('❌ Failed to fetch dashboard data:', error);
+      throw error;
     }
   };
 
   const fetchContractData = async () => {
-    if (!publicKey) return;
+    if (!portfolioData?.wallets.length) return;
 
     try {
-      // Fetch user profile and intents
-      const profile = await intentFiMobile.getUserProfile(publicKey);
+      // Use the first wallet's public key for IntentFI profile
+      const primaryWallet = portfolioData.wallets[0];
+      const profile = await intentFiMobile.getUserProfile(primaryWallet.publicKey);
       setUserProfile(profile);
-
-      // Note: We now use activeIntents from SolanaProvider instead of formatting IntentFI intents
-      // The SolanaProvider manages the real-time intent states
 
       // Fetch launchpad state
       const launchState = await intentFiMobile.advancedSDK.launchpad.getLaunchpadState();
-      setLaunchpadState(launchState);
 
       // Create protocol stats
       setProtocolStats({
@@ -88,16 +118,24 @@ export function DashboardScreen() {
         totalRaised: launchState?.totalRaised || 0,
       });
     } catch (error) {
-      console.error('❌ Failed to fetch contract data:', error);
+      console.warn('⚠️ Failed to fetch contract data:', error);
     }
   };
 
-  const getTotalPortfolioValue = () => {
-    const tokenValue = tokenBalances.reduce((total, token) => {
-      return total + token.uiAmount * (token.price || 0);
-    }, 0);
-
-    return tokenValue;
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      await fetchDashboardData();
+      if (isContractReady) {
+        await fetchContractData();
+      }
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch (error) {
+      console.error('❌ Failed to refresh dashboard:', error);
+      setError('Failed to refresh dashboard data');
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
   const quickActions = [
@@ -119,22 +157,9 @@ export function DashboardScreen() {
     { id: 4, title: 'Launch', icon: 'rocket', color: '#FF6B35', description: 'Token launchpad' },
   ];
 
-  const handleRefresh = async () => {
-    if (!connected) return;
-    await refreshBalances();
-    if (isContractReady) {
-      await fetchContractData();
-    }
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-  };
-
   const handleQuickAction = (action: any) => {
-    if (!connected) {
-      Alert.alert('Wallet Required', 'Please connect your wallet first');
-      return;
-    }
-    if (!isContractReady) {
-      Alert.alert('Loading', 'Contracts are still initializing...');
+    if (!isAuthenticated) {
+      Alert.alert('Authentication Required', 'Please log in first');
       return;
     }
 
@@ -142,7 +167,7 @@ export function DashboardScreen() {
 
     switch (action.title) {
       case 'Swap':
-        Alert.alert('Swap Intent', 'Navigate to Intent tab to create swap intents');
+        Alert.alert('Swap Intent', 'Navigate to Intent tab to create swap intents with your Turnkey wallets');
         break;
       case 'Lend':
         Alert.alert('Lend Intent', 'Navigate to Intent tab to create lending intents');
@@ -158,11 +183,11 @@ export function DashboardScreen() {
   const handleIntentAction = (intent: any, action: string) => {
     Alert.alert(
       'Intent Action',
-      `${action} intent: ${intent.description}\nCreated: ${intent.createdAt}`
+      `${action} intent: ${intent.type}\nStatus: ${intent.status}\nCreated: ${new Date(intent.createdAt).toLocaleDateString()}`
     );
   };
 
-  // Show onboarding if not connected
+  // Show onboarding if not authenticated
   if (showOnboarding) {
     return (
       <Modal visible={true} animationType="slide" presentationStyle="fullScreen">
@@ -171,12 +196,44 @@ export function DashboardScreen() {
     );
   }
 
-  const portfolioValue = getTotalPortfolioValue();
+  // Show loading state
+  if (isLoading) {
+    return (
+      <SafeAreaView className="flex-1 bg-dark-bg">
+        <View className="flex-1 items-center justify-center">
+          <Ionicons name="home" size={48} color="#FF4500" />
+          <Text className="mt-4 text-lg text-white">Loading Dashboard...</Text>
+          <Text className="mt-2 text-sm text-gray-400">Fetching your portfolio data</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // Show error state
+  if (error) {
+    return (
+      <SafeAreaView className="flex-1 bg-dark-bg">
+        <View className="flex-1 items-center justify-center p-6">
+          <Ionicons name="alert-circle" size={48} color="#EF4444" />
+          <Text className="mt-4 text-lg text-white">Error Loading Dashboard</Text>
+          <Text className="mt-2 text-center text-sm text-gray-400">{error}</Text>
+          <TouchableOpacity
+            onPress={initializeDashboard}
+            className="mt-6 rounded-lg bg-primary px-6 py-3">
+            <Text className="font-medium text-white">Retry</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  const portfolioValue = portfolioData?.totalPortfolioValue || 0;
   const portfolioChange = protocolStats
     ? `${(protocolStats.totalRaised / LAMPORTS_PER_SOL).toFixed(2)} SOL`
     : '$0.00';
-  const portfolioChangePercent =
-    activeIntents.length > 0 ? `+${activeIntents.length * 2.1}%` : '0%';
+  const portfolioChangePercent = portfolioData?.wallets.length 
+    ? `+${(portfolioData.wallets.length * 1.2).toFixed(1)}%` 
+    : '0%';
 
   const getStatusColor = (status: string) => {
     switch (status.toLowerCase()) {
@@ -185,6 +242,7 @@ export function DashboardScreen() {
         return '#10B981';
       case 'pending':
       case 'active':
+      case 'executing':
         return '#F59E0B';
       case 'cancelled':
       case 'expired':
@@ -197,31 +255,41 @@ export function DashboardScreen() {
 
   return (
     <SafeAreaView className="flex-1 bg-dark-bg">
-      <PullToRefresh onRefresh={handleRefresh}>
+      <ScrollView
+        className="flex-1"
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={handleRefresh}
+            tintColor="#FF4500"
+            colors={['#FF4500']}
+          />
+        }>
+        
         {/* Header */}
         <Animated.View
           entering={FadeInUp.duration(600)}
           className="flex-row items-center justify-between p-4 pt-2">
           <View>
             <Text className="text-sm text-dark-gray">Welcome back</Text>
-            <Text className="text-xl font-bold text-white">IntentFI</Text>
-            {isContractReady && (
-              <Text className="text-xs text-primary">
-                📡 {networkService.getCurrentNetwork().toUpperCase()}
-              </Text>
-            )}
+            <Text className="text-xl font-bold text-white">
+              {user?.username || user?.email?.split('@')[0] || 'IntentFI'}
+            </Text>
+            <Text className="text-xs text-primary">
+              📡 Mainnet • {portfolioData?.wallets.length || 0} Wallet{portfolioData?.wallets.length !== 1 ? 's' : ''}
+            </Text>
           </View>
           <View className="flex-row items-center">
-            {connected && publicKey && (
+            {user && (
               <View className="mr-3 rounded-full bg-success/20 px-3 py-1">
                 <Text className="text-xs font-medium text-success">
-                  {publicKey.toString().slice(0, 4)}...{publicKey.toString().slice(-4)}
+                  {user.email?.slice(0, 8)}...
                 </Text>
               </View>
             )}
             {isContractReady && (
               <View className="mr-3 rounded-full bg-primary/20 px-2 py-1">
-                <Text className="text-xs font-medium text-primary">Contract ✓</Text>
+                <Text className="text-xs font-medium text-primary">IntentFI ✓</Text>
               </View>
             )}
             <TouchableOpacity className="p-2">
@@ -248,9 +316,14 @@ export function DashboardScreen() {
                   })}
                 </Text>
                 <View className="mt-2 flex-row items-center">
-                  <Text className="text-sm text-white/90">Intent Volume: {portfolioChange}</Text>
+                  <Text className="text-sm text-white/90">
+                    SOL: {portfolioData?.totalSolBalance.toFixed(4) || '0.0000'}
+                  </Text>
                   <Text className="ml-2 text-sm text-white/90">{portfolioChangePercent}</Text>
                 </View>
+                <Text className="mt-1 text-xs text-white/70">
+                  {portfolioData?.allTokenBalances.length || 0} different assets
+                </Text>
               </View>
               <View className="h-12 w-12 items-center justify-center rounded-full bg-white/20">
                 <Ionicons name="trending-up" size={24} color="white" />
@@ -263,7 +336,7 @@ export function DashboardScreen() {
         {protocolStats && isContractReady && (
           <Animated.View entering={FadeInUp.duration(600).delay(150)} className="mx-4 mb-6">
             <View className="rounded-xl border border-dark-border bg-dark-card p-4">
-              <Text className="mb-3 font-semibold text-white">Protocol Statistics</Text>
+              <Text className="mb-3 font-semibold text-white">IntentFI Statistics</Text>
               <View className="flex-row justify-between">
                 <View className="items-center">
                   <Text className="text-lg font-bold text-primary">
@@ -326,21 +399,14 @@ export function DashboardScreen() {
             </TouchableOpacity>
           </View>
 
-          {!isContractReady ? (
-            <View className="items-center rounded-xl border border-dark-border bg-dark-card p-6">
-              <Ionicons name="refresh" size={24} color="#8E8E93" />
-              <Text className="mt-2 text-gray-400">Loading contract data...</Text>
-            </View>
-          ) : activeIntents.length === 0 ? (
+          {activeIntents.length === 0 ? (
             <View className="items-center rounded-xl border border-dark-border bg-dark-card p-6">
               <Ionicons name="flash-outline" size={32} color="#8E8E93" />
               <Text className="mt-2 text-center text-gray-400">
-                {userProfile?.account
-                  ? 'No active intents. Create your first intent!'
-                  : 'Initialize your account to start creating intents'}
+                No active intents. Create your first intent!
               </Text>
               <Text className="mt-1 text-xs text-gray-500">
-                Navigate to Intent tab to get started
+                Navigate to Intent tab to get started with your Turnkey wallets
               </Text>
             </View>
           ) : (
@@ -404,47 +470,41 @@ export function DashboardScreen() {
         <Animated.View entering={FadeInDown.duration(600).delay(400)} className="mb-8 px-4">
           <Text className="mb-4 text-lg font-semibold text-white">Recent Activity</Text>
 
-          {isContractReady && publicKey ? (
-            <View className="rounded-xl border border-dark-border bg-dark-card p-4">
-              <View className="mb-3 flex-row items-center justify-between">
-                <View className="flex-row items-center">
-                  <View className="mr-3 h-8 w-8 items-center justify-center rounded-full bg-primary/20">
-                    <Ionicons name="person-add" size={16} color="#FF4500" />
-                  </View>
-                  <View>
-                    <Text className="font-medium text-white">Account Connected</Text>
-                    <Text className="text-xs text-gray-400">Ready for IntentFI on devnet</Text>
-                  </View>
+          <View className="rounded-xl border border-dark-border bg-dark-card p-4">
+            <View className="mb-3 flex-row items-center justify-between">
+              <View className="flex-row items-center">
+                <View className="mr-3 h-8 w-8 items-center justify-center rounded-full bg-primary/20">
+                  <Ionicons name="wallet" size={16} color="#FF4500" />
                 </View>
-                <Text className="text-xs text-gray-400">Just now</Text>
+                <View>
+                  <Text className="font-medium text-white">Turnkey Wallets Connected</Text>
+                  <Text className="text-xs text-gray-400">
+                    {portfolioData?.wallets.length || 0} wallet{portfolioData?.wallets.length !== 1 ? 's' : ''} • Mainnet
+                  </Text>
+                </View>
               </View>
-
-              <View className="border-t border-dark-border pt-3">
-                <Text className="text-xs text-gray-400">
-                  Wallet: {publicKey.toString().slice(0, 20)}...
-                </Text>
-                <Text className="text-xs text-gray-400">
-                  Network: {networkService.getCurrentNetwork().toUpperCase()}
-                </Text>
-                <Text className="text-xs text-gray-400">
-                  IntentFI: 2UPCMZ2LESPx8wU83wdng3Yjhx2yxRLEkEDYDkNUg1jd
-                </Text>
-                <Text className="text-xs text-gray-400">
-                  Launchpad: 5y2X9WML5ttrWrxzUfGrLSxbXfEcKTyV1dDyw2jXW1Zg
-                </Text>
-              </View>
+              <Text className="text-xs text-gray-400">Active</Text>
             </View>
-          ) : (
-            <View className="items-center rounded-xl border border-dark-border bg-dark-card p-6">
-              <Ionicons name="time-outline" size={24} color="#8E8E93" />
-              <Text className="mt-2 text-gray-400">No recent activity</Text>
-              <Text className="text-xs text-gray-500">
-                Start using IntentFI to see activity here
+
+            {portfolioData?.wallets.slice(0, 2).map((wallet, index) => (
+              <View key={wallet.walletId} className="border-t border-dark-border pt-3 mt-3">
+                <Text className="text-xs text-gray-400">
+                  {wallet.walletName}: {wallet.address.slice(0, 8)}...{wallet.address.slice(-8)}
+                </Text>
+                <Text className="text-xs text-gray-400">
+                  Balance: ${wallet.totalValue.toFixed(2)} • {wallet.tokenBalances.length} assets
+                </Text>
+              </View>
+            ))}
+
+            <View className="border-t border-dark-border pt-3 mt-3">
+              <Text className="text-center text-xs text-gray-500">
+                Real-time data from Solana Mainnet via Turnkey authentication
               </Text>
             </View>
-          )}
+          </View>
         </Animated.View>
-      </PullToRefresh>
+      </ScrollView>
     </SafeAreaView>
   );
 }

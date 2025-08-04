@@ -3,9 +3,11 @@ import { View, Text, ScrollView, TouchableOpacity, Switch, Alert, Image } from '
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { FadeInUp, FadeInLeft } from 'react-native-reanimated';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { useSolana } from '../providers/SolanaProvider';
 import { usePhantomWallet } from '../providers/PhantomProvider';
+import { useTurnkeyAuth } from '../providers/TurnkeyAuthProvider';
 
 export function SettingsScreen() {
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
@@ -16,6 +18,11 @@ export function SettingsScreen() {
   // Get wallet state and disconnect functions
   const { disconnectWallet } = useSolana();
   const { logout: phantomLogout, isLoggedIn: phantomLoggedIn } = usePhantomWallet();
+  const {
+    user: turnkeyUser,
+    logout: turnkeyLogout,
+    isAuthenticated: turnkeyAuthenticated,
+  } = useTurnkeyAuth();
 
   const settingSections = [
     {
@@ -150,6 +157,12 @@ export function SettingsScreen() {
           try {
             console.log('👋 Logging out user...');
 
+            // Logout from Turnkey if authenticated
+            if (turnkeyAuthenticated) {
+              console.log('🔐 Logging out from Turnkey...');
+              await turnkeyLogout();
+            }
+
             // Disconnect from Phantom if connected
             if (phantomLoggedIn) {
               console.log('🦄 Disconnecting from Phantom...');
@@ -158,6 +171,9 @@ export function SettingsScreen() {
 
             // Disconnect from SolanaProvider (this also clears storage)
             await disconnectWallet();
+
+            // Clear onboarding status to force re-authentication
+            await AsyncStorage.removeItem('onboarding_complete');
 
             console.log('✅ Logout complete - returning to welcome screen');
           } catch (error) {
@@ -235,8 +251,18 @@ export function SettingsScreen() {
                 resizeMode="contain"
               />
               <View className="flex-1">
-                <Text className="text-xl font-bold text-white">IntentFI User</Text>
-                <Text className="text-sm text-dark-gray"></Text>
+                <Text className="text-xl font-bold text-white">
+                  {turnkeyUser?.username || 'IntentFI User'}
+                </Text>
+                <Text className="text-sm text-dark-gray">
+                  {turnkeyUser?.email || 'Not authenticated'}
+                </Text>
+                {turnkeyAuthenticated && (
+                  <View className="mt-2 flex-row items-center">
+                    <View className="mr-2 h-2 w-2 rounded-full bg-green-500" />
+                    <Text className="text-xs text-green-400">Authenticated</Text>
+                  </View>
+                )}
               </View>
             </View>
 

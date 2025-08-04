@@ -133,10 +133,7 @@ export class WalletService {
       Alert.alert(
         'Phantom Connection Available 🦄',
         'Phantom wallet integration is ready! Use the "Phantom Wallet" option in the connection screen.',
-        [
-          { text: 'Got it!', style: 'default' },
-          { text: 'Use Demo Instead', onPress: () => this.handleDemoWalletFallback() },
-        ]
+        [{ text: 'Got it!', style: 'default' }]
       );
 
       return null;
@@ -147,103 +144,9 @@ export class WalletService {
       Alert.alert(
         'Connection Setup Failed',
         'Unable to set up Phantom wallet. Would you like to use a demo wallet instead?',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Use Demo Wallet', onPress: () => this.handleDemoWalletFallback() },
-        ]
+        [{ text: 'Cancel', style: 'cancel' }]
       );
 
-      throw error;
-    }
-  }
-
-  /**
-   * Fallback to demo wallet creation
-   */
-  private async handleDemoWalletFallback(): Promise<WalletConnectionResult | null> {
-    try {
-      console.log('🎭 Creating demo wallet as Phantom fallback...');
-      const demoResult = await this.createDemoWallet();
-
-      Alert.alert(
-        'Demo Wallet Created! 🎭',
-        `Demo wallet ready for testing IntentFI features.\n\nAddress: ${demoResult.publicKey.toString().slice(0, 8)}...${demoResult.publicKey.toString().slice(-4)}\n\n💡 You can fund this wallet or switch to your Phantom wallet later.`,
-        [{ text: 'Continue with Demo', style: 'default' }]
-      );
-
-      return demoResult;
-    } catch (error) {
-      console.error('Demo wallet fallback failed:', error);
-      return null;
-    }
-  }
-
-  /**
-   * Create a test wallet for development/demo purposes
-   */
-  public async createTestWallet(): Promise<WalletConnectionResult> {
-    try {
-      // Authenticate with biometrics first (now with fallback)
-      const authenticated = await this.authenticateWithBiometrics({
-        title: 'Create Test Wallet',
-        subtitle: 'Authenticate to create a secure test wallet',
-        fallbackLabel: 'Skip for Demo',
-      });
-
-      if (!authenticated) {
-        // Fallback: Create wallet anyway for demo purposes
-        console.log('🔓 Creating demo wallet without authentication');
-      }
-
-      // Generate a new keypair for testing
-      const keypair = Keypair.generate();
-
-      // Store wallet securely
-      await this.storeWalletSecurely({
-        publicKey: keypair.publicKey.toString(),
-        privateKey: Array.from(keypair.secretKey), // Convert Uint8Array to regular array for JSON storage
-        walletType: 'test',
-      });
-
-      console.log('👤 Test wallet created:', keypair.publicKey.toString());
-
-      return {
-        publicKey: keypair.publicKey,
-        connected: true,
-        walletType: 'test',
-      };
-    } catch (error) {
-      console.error('Failed to create test wallet:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Create a demo wallet without any authentication (for seamless development)
-   */
-  public async createDemoWallet(): Promise<WalletConnectionResult> {
-    try {
-      console.log('🚀 Creating demo wallet for seamless development...');
-
-      // Generate a new keypair for testing
-      const keypair = Keypair.generate();
-
-      // Store wallet securely
-      await this.storeWalletSecurely({
-        publicKey: keypair.publicKey.toString(),
-        privateKey: Array.from(keypair.secretKey),
-        walletType: 'demo',
-      });
-
-      console.log('👤 Demo wallet created:', keypair.publicKey.toString());
-
-      return {
-        publicKey: keypair.publicKey,
-        connected: true,
-        walletType: 'test',
-      };
-    } catch (error) {
-      console.error('Failed to create demo wallet:', error);
       throw error;
     }
   }

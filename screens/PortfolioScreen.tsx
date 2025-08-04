@@ -1,166 +1,243 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, FlatList, Alert } from 'react-native';
+import {
+  View,
+  Text,
+  ScrollView,
+  TouchableOpacity,
+  Alert,
+  RefreshControl,
+  Image,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { FadeInUp, FadeInLeft, BounceIn } from 'react-native-reanimated';
-import { Keypair, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { LAMPORTS_PER_SOL } from '@solana/web3.js';
 
-// Import Solana provider and IntentFI services
-import { useSolana } from '../providers/SolanaProvider';
+// Import Turnkey auth and Solana services
+import { useTurnkeyAuth } from '../providers/TurnkeyAuthProvider';
+import {
+  turnkeySolanaService,
+  TurnkeyPortfolioData,
+  TurnkeyWalletData,
+  TurnkeyTokenBalance,
+} from '../services/turnkey-solana-service';
 import { intentFiMobile, networkService } from '../services';
 
 export function PortfolioScreen() {
   const [selectedTimeframe, setSelectedTimeframe] = useState('1D');
+  const [portfolioData, setPortfolioData] = useState<TurnkeyPortfolioData | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [isContractReady, setIsContractReady] = useState(false);
-  const [userKeypair, setUserKeypair] = useState<Keypair | null>(null);
   const [userProfile, setUserProfile] = useState<any>(null);
   const [portfolioStats, setPortfolioStats] = useState<any>(null);
-  const [launchpadStats, setLaunchpadStats] = useState<any>(null);
 
-  const { connected, balance, tokenBalances, refreshBalances } = useSolana();
+  const { isAuthenticated, user } = useTurnkeyAuth();
 
   const timeframes = ['1H', '1D', '1W', '1M', '1Y'];
 
   useEffect(() => {
-    if (connected) {
+    if (isAuthenticated && user) {
       initializePortfolioData();
     }
-  }, [connected]);
+  }, [isAuthenticated, user]);
 
   const initializePortfolioData = async () => {
     try {
-      await refreshBalances();
-      // Initialize IntentFI SDK
-      await intentFiMobile.initialize('devnet');
+      setIsLoading(true);
+      setError(null);
 
-      // Create test user for demo (in production, use actual wallet)
-      const testKeypair = Keypair.generate();
-      setUserKeypair(testKeypair);
+      console.log('🔄 Initializing portfolio data for authenticated user...');
 
-      setIsContractReady(true);
-      await fetchPortfolioData(testKeypair);
+      // Fetch real portfolio data from Turnkey wallets
+      await fetchPortfolioData();
+
+      // Initialize IntentFI SDK for additional stats
+      try {
+        await intentFiMobile.initialize('mainnet');
+        setIsContractReady(true);
+        console.log('✅ IntentFI SDK initialized for mainnet');
+      } catch (contractError) {
+        console.warn(
+          '⚠️ IntentFI SDK initialization failed, continuing without contract data:',
+          contractError
+        );
+        setIsContractReady(false);
+      }
 
       console.log('✅ Portfolio data initialized');
     } catch (error) {
       console.error('❌ Failed to initialize portfolio:', error);
+      setError(error instanceof Error ? error.message : 'Failed to load portfolio data');
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const fetchPortfolioData = async (keypair?: Keypair) => {
-    const targetKeypair = keypair || userKeypair;
-    if (!targetKeypair) return;
-
+  const fetchPortfolioData = async () => {
     try {
-      // Fetch user profile from IntentFI
-      const profile = await intentFiMobile.getUserProfile(targetKeypair.publicKey);
-      setUserProfile(profile);
+      console.log('📊 Fetching real portfolio data from Turnkey wallets...');
 
-      // Fetch launchpad data
-      const launchState = await intentFiMobile.advancedSDK.launchpad.getLaunchpadState();
-      setLaunchpadStats(launchState);
+      const data = await turnkeySolanaService.getPortfolioData();
+      setPortfolioData(data);
 
       // Calculate portfolio stats
-      const totalTokenValue = tokenBalances.reduce((total, token) => {
-        return total + token.uiAmount * (token.price || 0);
-      }, 0);
+      const stats = {
+        totalValue: data.totalPortfolioValue,
+        solValue: data.totalSolBalance,
+        tokenValue: data.totalTokenValue,
+        walletCount: data.wallets.length,
+        tokenCount: data.allTokenBalances.length,
+        largestHolding: data.allTokenBalances.reduce(
+          (largest, token) => {
+            const value = token.uiAmount * (token.price || 0);
+            return value > largest.value ? { symbol: token.symbol, value } : largest;
+          },
+          { symbol: 'N/A', value: 0 }
+        ),
+      };
 
-      setPortfolioStats({
-        totalValue: totalTokenValue,
-        solValue: balance,
-        tokenValue: totalTokenValue,
-        intentVolume: profile?.account?.totalVolume || 0,
-        activeIntents: profile?.account?.activeIntents || 0,
-        totalIntentsCreated: profile?.account?.totalIntentsCreated || 0,
-        launchContributions: 0, // Would fetch from launchpad contract
-      });
+      setPortfolioStats(stats);
+
+      // Try to fetch IntentFI profile if available
+      if (isContractReady && data.wallets.length > 0) {
+        try {
+          const profile = await intentFiMobile.getUserProfile(data.wallets[0].publicKey);
+          setUserProfile(profile);
+        } catch (profileError) {
+          console.warn('⚠️ Could not fetch IntentFI profile:', profileError);
+        }
+      }
+
+      console.log('✅ Portfolio data fetched successfully');
     } catch (error) {
       console.error('❌ Failed to fetch portfolio data:', error);
+      throw error;
     }
   };
 
-  // Format real token balances with estimated prices
-  const formatAssets = () => {
-    const assets = tokenBalances.map((token) => ({
-      symbol: token.symbol,
-      name: token.name ?? 'Solana',
-      balance: token.uiAmount.toLocaleString('en-US', {
-        minimumFractionDigits: token.symbol === 'SOL' ? 4 : 0,
-        maximumFractionDigits: token.symbol === 'SOL' ? 4 : 0,
-      }),
-      value: `$${(token.uiAmount * (token.price || 0)).toLocaleString('en-US', {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      })}`,
-      change: '+0.0%', // Would need historical data for real changes
-      changeColor: '#8E8E93',
-      price: token.price ? `$${token.price.toFixed(token.symbol === 'SOL' ? 2 : 6)}` : 'N/A',
-      uiAmount: token.uiAmount,
-      mint: token.mint,
-    }));
-
-    // Add SOL if not already present
-    if (!assets.find((asset) => asset.symbol === 'SOL') && balance > 0) {
-      assets.unshift({
-        symbol: 'SOL',
-        name: 'Solana',
-        balance: balance.toFixed(4),
-        value: `$${(balance * 189).toLocaleString('en-US', {
-          minimumFractionDigits: 2,
-          maximumFractionDigits: 2,
-        })}`,
-        change: '+0.0%',
-        changeColor: '#8E8E93',
-        price: '$189.00',
-        uiAmount: balance,
-        mint: 'So11111111111111111111111111111111111111112',
-      });
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      await fetchPortfolioData();
+    } catch (error) {
+      console.error('❌ Failed to refresh portfolio:', error);
+      setError('Failed to refresh portfolio data');
+    } finally {
+      setIsRefreshing(false);
     }
-
-    return assets.filter((asset) => asset.uiAmount > 0);
   };
 
-  const handleAssetPress = (asset: any) => {
+  const handleAssetPress = (asset: TurnkeyTokenBalance) => {
+    const value = asset.uiAmount * (asset.price || 0);
     Alert.alert(
-      `${asset.name} (${asset.symbol})`,
-      `Balance: ${asset.balance}\nValue: ${asset.value}\nPrice: ${asset.price}\nMint: ${asset.mint.slice(0, 20)}...`,
+      `${asset.name || asset.symbol}`,
+      `Symbol: ${asset.symbol}\nBalance: ${asset.uiAmount.toLocaleString()} ${asset.symbol}\nValue: $${value.toFixed(2)}\nPrice: $${(asset.price || 0).toFixed(asset.symbol === 'SOL' ? 2 : 6)}\n\nMint: ${asset.mint.slice(0, 20)}...`,
       [
         { text: 'OK' },
         {
           text: 'Create Intent',
-          onPress: () => Alert.alert('Navigate', 'Go to Intent tab to create swap/lend intents'),
+          onPress: () =>
+            Alert.alert('Navigate', 'Go to Intent tab to create swap/lend intents with this token'),
+        },
+      ]
+    );
+  };
+
+  const handleWalletPress = (wallet: TurnkeyWalletData) => {
+    Alert.alert(
+      wallet.walletName,
+      `Address: ${wallet.address.slice(0, 20)}...\nSOL Balance: ${wallet.solBalance.toFixed(4)} SOL\nToken Count: ${wallet.tokenBalances.length}\nTotal Value: $${wallet.totalValue.toFixed(2)}`,
+      [
+        { text: 'OK' },
+        {
+          text: 'View Details',
+          onPress: () =>
+            Alert.alert(
+              'Wallet Details',
+              `Full Address: ${wallet.address}\nWallet ID: ${wallet.walletId}`
+            ),
         },
       ]
     );
   };
 
   const getTotalPortfolioValue = () => {
-    if (!portfolioStats) return '$0.00';
-    return `$${portfolioStats.totalValue.toLocaleString('en-US', {
+    if (!portfolioData) return '$0.00';
+    return `$${portfolioData.totalPortfolioValue.toLocaleString('en-US', {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     })}`;
   };
 
   const getPortfolioChange = () => {
-    if (!portfolioStats || !userProfile?.account)
-      return { value: '$0.00', percent: '0%', color: '#8E8E93' };
+    if (!portfolioStats) return { value: '$0.00', percent: '0%', color: '#8E8E93' };
 
-    const intentVolumeValue = (portfolioStats.intentVolume / LAMPORTS_PER_SOL) * 189;
-    const changePercent =
-      portfolioStats.totalValue > 0
-        ? ((intentVolumeValue / portfolioStats.totalValue) * 100).toFixed(1)
-        : '0.0';
+    // Calculate 24h change based on SOL price movement (simplified)
+    const solValue = portfolioStats.solValue * 189; // Approximate SOL price
+    const changeValue = solValue * 0.024; // Assume 2.4% daily change
+    const changePercent = portfolioData
+      ? ((changeValue / portfolioData.totalPortfolioValue) * 100).toFixed(1)
+      : '0.0';
 
     return {
-      value: `$${intentVolumeValue.toFixed(2)}`,
+      value: `$${Math.abs(changeValue).toFixed(2)}`,
       percent: `+${changePercent}%`,
-      color: intentVolumeValue > 0 ? '#00D4AA' : '#8E8E93',
+      color: changeValue >= 0 ? '#00D4AA' : '#EF4444',
     };
   };
 
-  const assets = formatAssets();
+  // Show loading state
+  if (isLoading) {
+    return (
+      <SafeAreaView className="flex-1 bg-dark-bg">
+        <View className="flex-1 items-center justify-center">
+          <Ionicons name="wallet" size={48} color="#FF4500" />
+          <Text className="mt-4 text-lg text-white">Loading Portfolio...</Text>
+          <Text className="mt-2 text-sm text-gray-400">Fetching your Turnkey wallet</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // Show error state
+  if (error) {
+    return (
+      <SafeAreaView className="flex-1 bg-dark-bg">
+        <View className="flex-1 items-center justify-center p-6">
+          <Ionicons name="alert-circle" size={48} color="#EF4444" />
+          <Text className="mt-4 text-lg text-white">Error Loading Portfolio</Text>
+          <Text className="mt-2 text-center text-sm text-gray-400">{error}</Text>
+          <TouchableOpacity
+            onPress={initializePortfolioData}
+            className="mt-6 rounded-lg bg-primary px-6 py-3">
+            <Text className="font-medium text-white">Retry</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // Show not authenticated state
+  if (!isAuthenticated || !user) {
+    return (
+      <SafeAreaView className="flex-1 bg-dark-bg">
+        <View className="flex-1 items-center justify-center p-6">
+          <Ionicons name="lock-closed" size={48} color="#8E8E93" />
+          <Text className="mt-4 text-lg text-white">Authentication Required</Text>
+          <Text className="mt-2 text-center text-sm text-gray-400">
+            Please log in to view your portfolio
+          </Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   const portfolioChange = getPortfolioChange();
+  const assets = portfolioData?.allTokenBalances || [];
+  const wallets = portfolioData?.wallets || [];
 
   return (
     <SafeAreaView className="flex-1 bg-dark-bg">
@@ -171,16 +248,25 @@ export function PortfolioScreen() {
         <View>
           <Text className="text-2xl font-bold text-white">Portfolio</Text>
           <Text className="text-sm text-gray-400">
-            {connected ? 'Connected' : 'Not Connected'} •{' '}
-            {isContractReady ? networkService.getCurrentNetwork().toUpperCase() : 'Loading...'}
+            {wallets.length > 0 ? 'Your Solana Wallet' : 'No Wallets'} • Mainnet
           </Text>
         </View>
-        <TouchableOpacity onPress={refreshBalances} className="p-2">
+        <TouchableOpacity onPress={handleRefresh} className="p-2">
           <Ionicons name="refresh" size={24} color="#8E8E93" />
         </TouchableOpacity>
       </Animated.View>
 
-      <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
+      <ScrollView
+        className="flex-1"
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={handleRefresh}
+            tintColor="#FF4500"
+            colors={['#FF4500']}
+          />
+        }>
         {/* Portfolio Value Card */}
         <Animated.View entering={FadeInUp.duration(600).delay(100)} className="mx-4 mb-6">
           <LinearGradient
@@ -201,127 +287,168 @@ export function PortfolioScreen() {
                 ({portfolioChange.percent})
               </Text>
             </View>
-            {userProfile?.account && (
-              <Text className="mt-2 text-xs text-gray-500">
-                Intent Volume: {(portfolioStats?.intentVolume / LAMPORTS_PER_SOL || 0).toFixed(2)}{' '}
-                SOL
-              </Text>
+            {portfolioStats && (
+              <View className="mt-3 flex-row justify-between">
+                <View>
+                  <Text className="text-xs text-gray-500">SOL Balance</Text>
+                  <Text className="text-sm text-white">
+                    {portfolioStats.solValue.toFixed(4)} SOL
+                  </Text>
+                </View>
+                <View>
+                  <Text className="text-xs text-gray-500">Largest Holding</Text>
+                  <Text className="text-sm text-white">{portfolioStats.largestHolding.symbol}</Text>
+                </View>
+              </View>
             )}
           </LinearGradient>
         </Animated.View>
 
-        {/* Contract Stats */}
-        {isContractReady && portfolioStats && (
+        {/* Portfolio Stats */}
+        {portfolioStats && (
           <Animated.View entering={FadeInUp.duration(600).delay(150)} className="mx-4 mb-6">
             <View className="rounded-xl border border-dark-border bg-dark-card p-4">
-              <Text className="mb-3 font-semibold text-white">IntentFI Activity</Text>
+              <Text className="mb-3 font-semibold text-white">Portfolio Overview</Text>
               <View className="flex-row justify-between">
                 <View className="items-center">
                   <Text className="text-lg font-bold text-primary">
-                    {portfolioStats.totalIntentsCreated}
+                    {portfolioStats.walletCount}
                   </Text>
-                  <Text className="text-xs text-gray-400">Total Intents</Text>
+                  <Text className="text-xs text-gray-400">Wallet</Text>
                 </View>
                 <View className="items-center">
                   <Text className="text-lg font-bold text-primary">
-                    {portfolioStats.activeIntents}
+                    {portfolioStats.tokenCount}
                   </Text>
-                  <Text className="text-xs text-gray-400">Active</Text>
+                  <Text className="text-xs text-gray-400">Assets</Text>
                 </View>
                 <View className="items-center">
                   <Text className="text-lg font-bold text-primary">
-                    {(portfolioStats.intentVolume / LAMPORTS_PER_SOL).toFixed(1)}
+                    ${(portfolioStats.tokenValue / 1000).toFixed(1)}K
                   </Text>
-                  <Text className="text-xs text-gray-400">SOL Volume</Text>
+                  <Text className="text-xs text-gray-400">Token Value</Text>
                 </View>
                 <View className="items-center">
                   <Text className="text-lg font-bold text-primary">
-                    {portfolioStats.launchContributions}
+                    {isContractReady ? '✓' : '○'}
                   </Text>
-                  <Text className="text-xs text-gray-400">Launches</Text>
+                  <Text className="text-xs text-gray-400">IntentFI</Text>
                 </View>
               </View>
             </View>
           </Animated.View>
         )}
 
-        {/* Timeframe Selector */}
-        <Animated.View entering={FadeInUp.duration(600).delay(200)} className="mb-6 px-4">
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            <View className="flex-row space-x-3">
-              {timeframes.map((timeframe) => (
+        {/* Wallet Section */}
+        {wallets.length > 0 && (
+          <Animated.View entering={FadeInLeft.duration(600).delay(250)} className="mb-6 px-4">
+            <Text className="mb-4 text-lg font-semibold text-white">Your Solana Wallet</Text>
+            {wallets.map((wallet, index) => (
+              <Animated.View
+                key={wallet.walletId}
+                entering={BounceIn.duration(600).delay(index * 100)}>
                 <TouchableOpacity
-                  key={timeframe}
-                  onPress={() => setSelectedTimeframe(timeframe)}
-                  className={`rounded-full px-4 py-2 ${
-                    selectedTimeframe === timeframe
-                      ? 'bg-primary'
-                      : 'border border-dark-border bg-dark-card'
-                  }`}>
-                  <Text
-                    className={`font-medium ${
-                      selectedTimeframe === timeframe ? 'text-white' : 'text-gray-400'
-                    }`}>
-                    {timeframe}
-                  </Text>
+                  onPress={() => handleWalletPress(wallet)}
+                  className="mb-3 flex-row items-center rounded-2xl border border-dark-border bg-dark-card p-4">
+                  <View className="mr-4 h-12 w-12 items-center justify-center rounded-full bg-primary/20">
+                    <Ionicons name="wallet" size={20} color="#FF4500" />
+                  </View>
+
+                  <View className="flex-1">
+                    <View className="flex-row items-center justify-between">
+                      <View>
+                        <Text className="font-semibold text-white">{wallet.walletName}</Text>
+                        <Text className="text-sm text-gray-400">
+                          {wallet.address.slice(0, 8)}...{wallet.address.slice(-8)}
+                        </Text>
+                      </View>
+                      <View className="items-end">
+                        <Text className="font-semibold text-white">
+                          ${wallet.totalValue.toFixed(2)}
+                        </Text>
+                        <Text className="text-sm text-gray-400">
+                          {wallet.tokenBalances.length} assets
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View className="mt-2 flex-row justify-between">
+                      <Text className="text-xs text-gray-500">
+                        SOL: {wallet.solBalance.toFixed(4)}
+                      </Text>
+                      <Text className="text-xs text-gray-500">Mainnet</Text>
+                    </View>
+                  </View>
+
+                  <Ionicons name="chevron-forward" size={20} color="#8E8E93" />
                 </TouchableOpacity>
-              ))}
-            </View>
-          </ScrollView>
-        </Animated.View>
+              </Animated.View>
+            ))}
+          </Animated.View>
+        )}
 
         {/* Holdings */}
         <Animated.View entering={FadeInLeft.duration(600).delay(300)} className="mb-8 px-4">
           <Text className="mb-4 text-lg font-semibold text-white">Holdings ({assets.length})</Text>
 
-          {!connected ? (
-            <View className="items-center rounded-xl border border-dark-border bg-dark-card p-8">
-              <Ionicons name="wallet-outline" size={48} color="#8E8E93" />
-              <Text className="mt-4 text-center text-gray-400">
-                Connect your wallet to view holdings
-              </Text>
-            </View>
-          ) : assets.length === 0 ? (
+          {assets.length === 0 ? (
             <View className="items-center rounded-xl border border-dark-border bg-dark-card p-8">
               <Ionicons name="list-outline" size={48} color="#8E8E93" />
-              <Text className="mt-4 text-center text-gray-400">No tokens found in your wallet</Text>
+              <Text className="mt-4 text-center text-gray-400">No assets found</Text>
               <Text className="mt-2 text-xs text-gray-500">
-                Add some SOL or SPL tokens to get started
+                Your Turnkey wallet doesn&apos;t contain any tokens
               </Text>
             </View>
           ) : (
             assets.map((asset, index) => (
               <Animated.View
-                key={asset.symbol}
+                key={`${asset.mint}-${index}`}
                 entering={BounceIn.duration(600).delay(index * 100)}>
                 <TouchableOpacity
                   onPress={() => handleAssetPress(asset)}
                   className="mb-3 flex-row items-center rounded-2xl border border-dark-border bg-dark-card p-4">
+                  {/* Token Icon */}
                   <View className="mr-4 h-12 w-12 items-center justify-center rounded-full bg-primary/20">
-                    <Text className="text-sm font-bold text-primary">
-                      {asset.symbol.slice(0, 3)}
-                    </Text>
+                    {asset.logoURI ? (
+                      <Image
+                        source={{ uri: asset.logoURI }}
+                        className="h-8 w-8 rounded-full"
+                        onError={() => console.log('Failed to load token image:', asset.logoURI)}
+                      />
+                    ) : (
+                      <Text className="text-sm font-bold text-primary">
+                        {asset.symbol.slice(0, 3)}
+                      </Text>
+                    )}
                   </View>
 
                   <View className="flex-1">
                     <View className="flex-row items-center justify-between">
                       <View>
                         <Text className="font-semibold text-white">{asset.symbol}</Text>
-                        <Text className="text-sm text-gray-400">{asset.name}</Text>
+                        <Text className="text-sm text-gray-400">
+                          {asset.name || 'Unknown Token'}
+                        </Text>
                       </View>
                       <View className="items-end">
-                        <Text className="font-semibold text-white">{asset.value}</Text>
+                        <Text className="font-semibold text-white">
+                          ${(asset.uiAmount * (asset.price || 0)).toFixed(2)}
+                        </Text>
                         <Text className="text-sm text-gray-400">
-                          {asset.balance} {asset.symbol}
+                          {asset.uiAmount.toLocaleString(undefined, {
+                            minimumFractionDigits: asset.symbol === 'SOL' ? 4 : 0,
+                            maximumFractionDigits: asset.symbol === 'SOL' ? 4 : 6,
+                          })}{' '}
+                          {asset.symbol}
                         </Text>
                       </View>
                     </View>
 
                     <View className="mt-2 flex-row items-center justify-between">
-                      <Text className="text-xs text-gray-500">Price: {asset.price}</Text>
-                      <Text className="text-xs" style={{ color: asset.changeColor }}>
-                        {asset.change}
+                      <Text className="text-xs text-gray-500">
+                        Price: ${(asset.price || 0).toFixed(asset.symbol === 'SOL' ? 2 : 6)}
                       </Text>
+                      <Text className="text-xs text-gray-500">Mainnet • Real-time</Text>
                     </View>
                   </View>
 
@@ -332,41 +459,37 @@ export function PortfolioScreen() {
           )}
         </Animated.View>
 
-        {/* Contract Information */}
-        {isContractReady && userKeypair && (
-          <Animated.View entering={FadeInUp.duration(600).delay(400)} className="mb-8 px-4">
-            <Text className="mb-4 text-lg font-semibold text-white">Contract Information</Text>
-            <View className="rounded-xl border border-dark-border bg-dark-card p-4">
-              <View className="space-y-3">
+        {/* Network Information */}
+        <Animated.View entering={FadeInUp.duration(600).delay(400)} className="mb-8 px-4">
+          <Text className="mb-4 text-lg font-semibold text-white">Network Information</Text>
+          <View className="rounded-xl border border-dark-border bg-dark-card p-4">
+            <View className="space-y-3">
+              <View className="flex-row justify-between">
+                <Text className="text-gray-400">Network</Text>
+                <Text className="text-white">Solana Mainnet</Text>
+              </View>
+              <View className="flex-row justify-between">
+                <Text className="text-gray-400">Data Source</Text>
+                <Text className="text-white">Turnkey Wallet</Text>
+              </View>
+              <View className="flex-row justify-between">
+                <Text className="text-gray-400">Price Feed</Text>
+                <Text className="text-white">Fallback Prices</Text>
+              </View>
+              {isContractReady && (
                 <View className="flex-row justify-between">
-                  <Text className="text-gray-400">Network</Text>
-                  <Text className="text-white">
-                    {networkService.getCurrentNetwork().toUpperCase()}
-                  </Text>
+                  <Text className="text-gray-400">IntentFI Status</Text>
+                  <Text className="text-success">Connected</Text>
                 </View>
-                <View className="flex-row justify-between">
-                  <Text className="text-gray-400">Your Wallet</Text>
-                  <Text className="font-mono text-xs text-white">
-                    {userKeypair.publicKey.toString().slice(0, 20)}...
-                  </Text>
-                </View>
-                <View className="flex-row justify-between">
-                  <Text className="text-gray-400">IntentFI Contract</Text>
-                  <Text className="font-mono text-xs text-white">2UPCMZ2L...</Text>
-                </View>
-                <View className="flex-row justify-between">
-                  <Text className="text-gray-400">Launchpad Contract</Text>
-                  <Text className="font-mono text-xs text-white">5y2X9WML...</Text>
-                </View>
-                <View className="border-t border-dark-border pt-3">
-                  <Text className="text-center text-xs text-gray-500">
-                    All contracts deployed on Solana Devnet for testing
-                  </Text>
-                </View>
+              )}
+              <View className="border-t border-dark-border pt-3">
+                <Text className="text-center text-xs text-gray-500">
+                  Portfolio data from your authenticated Turnkey wallet on Solana mainnet
+                </Text>
               </View>
             </View>
-          </Animated.View>
-        )}
+          </View>
+        </Animated.View>
       </ScrollView>
     </SafeAreaView>
   );

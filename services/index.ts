@@ -10,6 +10,7 @@ export * from './launchpad-service';
 export * from './wallet-service';
 export * from './transaction-service';
 export * from './funded-wallet-pool';
+export * from './turnkey-auth-service';
 
 import { networkService } from './config';
 import { intentFiService } from './intentfi-service';
@@ -306,11 +307,14 @@ export class IntentFiMobile {
 
     if (!walletResult) {
       // Create a new demo wallet without authentication barriers
-      walletResult = await walletService.createDemoWallet();
+      console.log('No existing wallet found. Create a new one...');
     }
 
     // Check if wallet has funds
     const connection = networkService.getConnection();
+    if (!walletResult || !walletResult.publicKey) {
+      throw new Error('No wallet found to check balance.');
+    }
     const balance = await connection.getBalance(walletResult.publicKey);
     const hasMinimumFunds = balance >= 50000000; // 0.05 SOL minimum (lowered threshold)
 
