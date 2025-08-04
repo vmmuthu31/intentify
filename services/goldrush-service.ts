@@ -288,60 +288,75 @@ class GoldRushService {
   }
 
   /**
-   * Process transactions data
+   * Process transactions data from Helius API
    */
   private processTransactions(
-    transactions: GoldRushTransaction[],
+    transactions: any[],
     userAddress: string
   ): ProcessedTransaction[] {
     return transactions.map((tx) => {
-      const value = parseFloat(tx.value) / Math.pow(10, 9); // Convert lamports to SOL
-      const gasFee = parseFloat(tx.fees_paid) / Math.pow(10, 9); // Convert lamports to SOL
-
-      // Determine transaction type
+      // Handle Helius transaction structure
+      const fee = tx.fee || 0;
+      const gasFee = fee / Math.pow(10, 9); // Convert lamports to SOL
+      
+      // Get transaction type and description from Helius data
       let type: ProcessedTransaction['type'] = 'unknown';
-      let description = 'Transaction';
-
-      if (tx.from_address.toLowerCase() === userAddress.toLowerCase()) {
-        if (tx.to_address.toLowerCase() === userAddress.toLowerCase()) {
-          type = 'swap';
-          description = 'Token Swap';
-        } else {
-          type = 'sent';
-          description = `Sent to ${tx.to_address.slice(0, 6)}...${tx.to_address.slice(-4)}`;
+      let description = tx.description || 'Transaction';
+      
+      // Map Helius transaction types to our types
+      if (tx.type) {
+        switch (tx.type.toUpperCase()) {
+          case 'SWAP':
+            type = 'swap';
+            break;
+          case 'TRANSFER':
+            // Determine if sent or received based on native transfers
+            if (tx.nativeTransfers && tx.nativeTransfers.length > 0) {
+              const userTransfer = tx.nativeTransfers.find((transfer: any) => 
+                transfer.fromUserAccount === userAddress || transfer.toUserAccount === userAddress
+              );
+              if (userTransfer) {
+                type = userTransfer.fromUserAccount === userAddress ? 'sent' : 'received';
+              }
+            }
+            break;
+          default:
+            type = 'unknown';
         }
-      } else {
-        type = 'received';
-        description = `Received from ${tx.from_address.slice(0, 6)}...${tx.from_address.slice(-4)}`;
       }
 
-      // Check for common DeFi patterns
-      if (tx.log_events && tx.log_events.length > 0) {
-        // Look for swap-related events
-        const hasSwapEvents = tx.log_events.some(
-          (event: any) =>
-            event.decoded?.name?.toLowerCase().includes('swap') ||
-            event.decoded?.name?.toLowerCase().includes('trade')
+      // Calculate transaction value from native transfers
+      let value = 0;
+      if (tx.nativeTransfers && tx.nativeTransfers.length > 0) {
+        const userTransfers = tx.nativeTransfers.filter((transfer: any) => 
+          transfer.fromUserAccount === userAddress || transfer.toUserAccount === userAddress
         );
-
-        if (hasSwapEvents) {
-          type = 'swap';
-          description = 'Token Swap';
-        }
+        
+        // Sum up the amounts for user-related transfers
+        value = userTransfers.reduce((sum: number, transfer: any) => {
+          const amount = transfer.amount || 0;
+          return sum + (amount / Math.pow(10, 9)); // Convert lamports to SOL
+        }, 0);
       }
+
+      // Get addresses from fee payer and account data
+      const fromAddress = tx.feePayer || userAddress;
+      const toAddress = tx.accountData && tx.accountData.length > 1 
+        ? tx.accountData[1].account 
+        : userAddress;
 
       return {
-        hash: tx.tx_hash,
-        timestamp: tx.block_signed_at,
-        blockHeight: tx.block_height,
-        successful: tx.successful,
-        fromAddress: tx.from_address,
-        toAddress: tx.to_address,
+        hash: tx.signature || '',
+        timestamp: tx.timestamp ? new Date(tx.timestamp * 1000).toISOString() : new Date().toISOString(),
+        blockHeight: tx.slot || 0,
+        successful: !tx.transactionError,
+        fromAddress,
+        toAddress,
         value,
-        valueUSD: tx.value_quote || 0,
-        gasUsed: tx.gas_spent,
+        valueUSD: 0, // Helius doesn't provide USD values directly
+        gasUsed: 0, // Not available in Helius format
         gasFee,
-        gasFeeUSD: tx.gas_quote || 0,
+        gasFeeUSD: 0, // Not available in Helius format
         type,
         description,
       };

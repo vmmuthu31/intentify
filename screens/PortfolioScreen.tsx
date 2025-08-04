@@ -509,7 +509,9 @@ export function PortfolioScreen() {
                           <Image
                             source={{ uri: asset.logoURI }}
                             className="h-8 w-8 rounded-full"
-                            onError={() => console.log('Failed to load token image:', asset.logoURI)}
+                            onError={() =>
+                              console.log('Failed to load token image:', asset.logoURI)
+                            }
                           />
                         ) : (
                           <Text className="text-sm font-bold text-primary">
@@ -601,18 +603,18 @@ export function PortfolioScreen() {
                             transaction.type === 'sent'
                               ? 'arrow-up'
                               : transaction.type === 'received'
-                              ? 'arrow-down'
-                              : transaction.type === 'swap'
-                              ? 'swap-horizontal'
-                              : 'help'
+                                ? 'arrow-down'
+                                : transaction.type === 'swap'
+                                  ? 'swap-horizontal'
+                                  : 'help'
                           }
                           size={20}
                           color={
                             transaction.type === 'sent'
                               ? '#EF4444'
                               : transaction.type === 'received'
-                              ? '#00D4AA'
-                              : '#FF4500'
+                                ? '#00D4AA'
+                                : '#FF4500'
                           }
                         />
                       </View>
@@ -621,29 +623,12 @@ export function PortfolioScreen() {
                         <View className="flex-row items-center justify-between">
                           <View>
                             <Text className="font-semibold text-white">
-                              {transaction.description}
+                              {transaction.description.slice(0, 5)}...
+                              {transaction.description.slice(42, -1)}
                             </Text>
                             <Text className="text-sm text-gray-400">
                               {new Date(transaction.timestamp).toLocaleDateString()} at{' '}
                               {new Date(transaction.timestamp).toLocaleTimeString()}
-                            </Text>
-                          </View>
-                          <View className="items-end">
-                            <Text
-                              className="font-semibold"
-                              style={{
-                                color:
-                                  transaction.type === 'sent'
-                                    ? '#EF4444'
-                                    : transaction.type === 'received'
-                                    ? '#00D4AA'
-                                    : '#FFFFFF',
-                              }}>
-                              {transaction.type === 'sent' ? '-' : transaction.type === 'received' ? '+' : ''}
-                              {transaction.value.toFixed(4)} SOL
-                            </Text>
-                            <Text className="text-sm text-gray-400">
-                              ${transaction.valueUSD.toFixed(2)}
                             </Text>
                           </View>
                         </View>
