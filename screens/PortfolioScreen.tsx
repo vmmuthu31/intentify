@@ -489,42 +489,6 @@ export function PortfolioScreen() {
             ))
           )}
         </Animated.View>
-
-        {/* Network Information */}
-        <Animated.View entering={FadeInUp.duration(600).delay(400)} className="mb-8 px-4">
-          <Text className="mb-4 text-lg font-semibold text-white">Data Sources</Text>
-          <View className="rounded-xl border border-dark-border bg-dark-card p-4">
-            <View className="space-y-3">
-              <View className="flex-row justify-between">
-                <Text className="text-gray-400">Network</Text>
-                <Text className="text-white">Solana Mainnet</Text>
-              </View>
-              <View className="flex-row justify-between">
-                <Text className="text-gray-400">Wallet Data</Text>
-                <Text className="text-white">Turnkey</Text>
-              </View>
-              <View className="flex-row justify-between">
-                <Text className="text-gray-400">Balance & Prices</Text>
-                <Text className="text-white">GoldRush API</Text>
-              </View>
-              <View className="flex-row justify-between">
-                <Text className="text-gray-400">Price Updates</Text>
-                <Text className="text-white">Real-time</Text>
-              </View>
-              {isContractReady && (
-                <View className="flex-row justify-between">
-                  <Text className="text-gray-400">IntentFI Status</Text>
-                  <Text className="text-success">Connected</Text>
-                </View>
-              )}
-              <View className="border-t border-dark-border pt-3">
-                <Text className="text-center text-xs text-gray-500">
-                  Portfolio data powered by GoldRush API with real-time pricing and 24h changes
-                </Text>
-              </View>
-            </View>
-          </View>
-        </Animated.View>
       </ScrollView>
     </SafeAreaView>
   );
