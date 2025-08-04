@@ -2,7 +2,7 @@
 
 **AI-Powered DeFi Assistant for Solana Mobile**
 
-*Solana Mobile Hackathon 2025 Submission*
+_Solana Mobile Hackathon 2025 Submission_
 
 [![GitHub](https://img.shields.io/badge/GitHub-Repository-blue?logo=github)](https://github.com/vmmuthu31/intentify)
 [![Solana](https://img.shields.io/badge/Built%20on-Solana-purple?logo=solana)](https://solana.com)
@@ -392,7 +392,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 **Team**: IntentiFi Team  
 **Category**: DeFi & Mobile  
-**Submission Date**: January 2025
+**Submission Date**: 5 August 2025
 
 ### Key Innovations
 
