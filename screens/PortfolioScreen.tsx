@@ -1,27 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import {
-  View,
-  Text,
-  ScrollView,
-  TouchableOpacity,
-  Alert,
-  RefreshControl,
-  Image,
-} from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, Alert, RefreshControl, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { FadeInUp, FadeInLeft, BounceIn } from 'react-native-reanimated';
 import { LAMPORTS_PER_SOL } from '@solana/web3.js';
+import * as Clipboard from 'expo-clipboard';
+import * as Haptics from 'expo-haptics';
 
 // Import Turnkey auth and Solana services
 import { useTurnkeyAuth } from '../providers/TurnkeyAuthProvider';
-import {
-  turnkeySolanaService,
-  TurnkeyPortfolioData,
-  TurnkeyWalletData,
-  TurnkeyTokenBalance,
-} from '../services/turnkey-solana-service';
+import { turnkeySolanaService, TurnkeyPortfolioData, TurnkeyWalletData, TurnkeyTokenBalance } from '../services/turnkey-solana-service';
 import { intentFiMobile, networkService } from '../services';
 
 export function PortfolioScreen() {
@@ -48,22 +37,19 @@ export function PortfolioScreen() {
     try {
       setIsLoading(true);
       setError(null);
-
+      
       console.log('🔄 Initializing portfolio data with GoldRush API...');
-
+      
       // Fetch real portfolio data from Turnkey wallets using GoldRush
       await fetchPortfolioData();
-
+      
       // Initialize IntentFI SDK for additional stats
       try {
         await intentFiMobile.initialize('mainnet');
         setIsContractReady(true);
         console.log('✅ IntentFI SDK initialized for mainnet');
       } catch (contractError) {
-        console.warn(
-          '⚠️ IntentFI SDK initialization failed, continuing without contract data:',
-          contractError
-        );
+        console.warn('⚠️ IntentFI SDK initialization failed, continuing without contract data:', contractError);
         setIsContractReady(false);
       }
 
@@ -79,10 +65,10 @@ export function PortfolioScreen() {
   const fetchPortfolioData = async () => {
     try {
       console.log('📊 Fetching real portfolio data from GoldRush API...');
-
+      
       const data = await turnkeySolanaService.getPortfolioData();
       setPortfolioData(data);
-
+      
       // Calculate portfolio stats
       const stats = {
         totalValue: data.totalPortfolioValue,
@@ -91,18 +77,15 @@ export function PortfolioScreen() {
         tokenValue: data.totalTokenValue,
         walletCount: data.wallets.length,
         tokenCount: data.allTokenBalances.length,
-        largestHolding: data.allTokenBalances.reduce(
-          (largest, token) => {
-            const value = token.value || 0;
-            return value > largest.value ? { symbol: token.symbol, value } : largest;
-          },
-          { symbol: 'N/A', value: 0 }
-        ),
+        largestHolding: data.allTokenBalances.reduce((largest, token) => {
+          const value = token.value || 0;
+          return value > largest.value ? { symbol: token.symbol, value } : largest;
+        }, { symbol: 'N/A', value: 0 }),
         lastUpdated: data.lastUpdated,
       };
-
+      
       setPortfolioStats(stats);
-
+      
       // Try to fetch IntentFI profile if available
       if (isContractReady && data.wallets.length > 0) {
         try {
@@ -112,7 +95,7 @@ export function PortfolioScreen() {
           console.warn('⚠️ Could not fetch IntentFI profile:', profileError);
         }
       }
-
+      
       console.log('✅ Portfolio data fetched successfully from GoldRush');
     } catch (error) {
       console.error('❌ Failed to fetch portfolio data:', error);
@@ -134,20 +117,34 @@ export function PortfolioScreen() {
     }
   };
 
+  const handleCopyAddress = async (address: string) => {
+    try {
+      await Clipboard.setStringAsync(address);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      Alert.alert('Copied! 📋', `Wallet address copied to clipboard\n\n${address.slice(0, 20)}...`, [{ text: 'OK' }]);
+    } catch (error) {
+      console.error('Failed to copy address:', error);
+      Alert.alert('Error', 'Failed to copy address to clipboard');
+    }
+  };
+
   const handleAssetPress = (asset: TurnkeyTokenBalance) => {
     const value = asset.value || 0;
     const change24h = asset.valueChange24h || 0;
     const priceChange = asset.priceChange24h || 0;
-
+    
     Alert.alert(
       `${asset.name || asset.symbol}`,
       `Symbol: ${asset.symbol}\nBalance: ${asset.uiAmount.toLocaleString()} ${asset.symbol}\nValue: $${value.toFixed(2)}\nPrice: $${(asset.price || 0).toFixed(asset.symbol === 'SOL' ? 2 : 6)}\n24h Change: ${priceChange >= 0 ? '+' : ''}${priceChange.toFixed(2)}%\n\nMint: ${asset.mint.slice(0, 20)}...`,
       [
         { text: 'OK' },
         {
+          text: 'Copy Mint',
+          onPress: () => handleCopyAddress(asset.mint),
+        },
+        {
           text: 'Create Intent',
-          onPress: () =>
-            Alert.alert('Navigate', 'Go to Intent tab to create swap/lend intents with this token'),
+          onPress: () => Alert.alert('Navigate', 'Go to Intent tab to create swap/lend intents with this token'),
         },
       ]
     );
@@ -161,12 +158,12 @@ export function PortfolioScreen() {
       [
         { text: 'OK' },
         {
+          text: 'Copy Address',
+          onPress: () => handleCopyAddress(wallet.address),
+        },
+        {
           text: 'View Details',
-          onPress: () =>
-            Alert.alert(
-              'Wallet Details',
-              `Full Address: ${wallet.address}\nWallet ID: ${wallet.walletId}`
-            ),
+          onPress: () => Alert.alert('Wallet Details', `Full Address: ${wallet.address}\nWallet ID: ${wallet.walletId}`),
         },
       ]
     );
@@ -186,10 +183,9 @@ export function PortfolioScreen() {
     }
 
     const changeValue = portfolioData.totalValueChange24h;
-    const changePercent =
-      portfolioData.totalPortfolioValue > 0
-        ? ((changeValue / portfolioData.totalPortfolioValue) * 100).toFixed(1)
-        : '0.0';
+    const changePercent = portfolioData.totalPortfolioValue > 0 
+      ? ((changeValue / portfolioData.totalPortfolioValue) * 100).toFixed(1)
+      : '0.0';
 
     return {
       value: `$${Math.abs(changeValue).toFixed(2)}`,
@@ -260,13 +256,23 @@ export function PortfolioScreen() {
             {wallets.length > 0 ? 'Your Solana Wallet' : 'No Wallets'} • GoldRush API
           </Text>
         </View>
-        <TouchableOpacity onPress={handleRefresh} className="p-2">
-          <Ionicons name="refresh" size={24} color="#8E8E93" />
-        </TouchableOpacity>
+        <View className="flex-row items-center">
+          {/* Copy Address Button */}
+          {wallets.length > 0 && (
+            <TouchableOpacity 
+              onPress={() => handleCopyAddress(wallets[0].address)}
+              className="mr-3 rounded-lg bg-primary/20 p-2">
+              <Ionicons name="copy" size={20} color="#FF4500" />
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity onPress={handleRefresh} className="p-2">
+            <Ionicons name="refresh" size={24} color="#8E8E93" />
+          </TouchableOpacity>
+        </View>
       </Animated.View>
 
-      <ScrollView
-        className="flex-1"
+      <ScrollView 
+        className="flex-1" 
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
@@ -276,6 +282,7 @@ export function PortfolioScreen() {
             colors={['#FF4500']}
           />
         }>
+        
         {/* Portfolio Value Card */}
         <Animated.View entering={FadeInUp.duration(600).delay(100)} className="mx-4 mb-6">
           <LinearGradient
@@ -300,16 +307,12 @@ export function PortfolioScreen() {
               <View className="mt-3 flex-row justify-between">
                 <View>
                   <Text className="text-xs text-gray-500">SOL Balance</Text>
-                  <Text className="text-sm text-white">
-                    {portfolioStats.solValue.toFixed(4)} SOL
-                  </Text>
+                  <Text className="text-sm text-white">{portfolioStats.solValue.toFixed(4)} SOL</Text>
                 </View>
                 <View>
                   <Text className="text-xs text-gray-500">Last Updated</Text>
                   <Text className="text-sm text-white">
-                    {portfolioStats.lastUpdated
-                      ? new Date(portfolioStats.lastUpdated).toLocaleTimeString()
-                      : 'Now'}
+                    {portfolioStats.lastUpdated ? new Date(portfolioStats.lastUpdated).toLocaleTimeString() : 'Now'}
                   </Text>
                 </View>
               </View>
@@ -324,15 +327,11 @@ export function PortfolioScreen() {
               <Text className="mb-3 font-semibold text-white">Portfolio Overview</Text>
               <View className="flex-row justify-between">
                 <View className="items-center">
-                  <Text className="text-lg font-bold text-primary">
-                    {portfolioStats.walletCount}
-                  </Text>
+                  <Text className="text-lg font-bold text-primary">{portfolioStats.walletCount}</Text>
                   <Text className="text-xs text-gray-400">Wallet</Text>
                 </View>
                 <View className="items-center">
-                  <Text className="text-lg font-bold text-primary">
-                    {portfolioStats.tokenCount}
-                  </Text>
+                  <Text className="text-lg font-bold text-primary">{portfolioStats.tokenCount}</Text>
                   <Text className="text-xs text-gray-400">Assets</Text>
                 </View>
                 <View className="items-center">
@@ -369,11 +368,18 @@ export function PortfolioScreen() {
 
                   <View className="flex-1">
                     <View className="flex-row items-center justify-between">
-                      <View>
+                      <View className="flex-1">
                         <Text className="font-semibold text-white">{wallet.walletName}</Text>
-                        <Text className="text-sm text-gray-400">
-                          {wallet.address.slice(0, 8)}...{wallet.address.slice(-8)}
-                        </Text>
+                        <View className="flex-row items-center">
+                          <Text className="text-sm text-gray-400">
+                            {wallet.address.slice(0, 8)}...{wallet.address.slice(-8)}
+                          </Text>
+                          <TouchableOpacity 
+                            onPress={() => handleCopyAddress(wallet.address)}
+                            className="ml-2 rounded p-1">
+                            <Ionicons name="copy-outline" size={14} color="#8E8E93" />
+                          </TouchableOpacity>
+                        </View>
                       </View>
                       <View className="items-end">
                         <Text className="font-semibold text-white">
@@ -384,19 +390,18 @@ export function PortfolioScreen() {
                         </Text>
                       </View>
                     </View>
-
+                    
                     <View className="mt-2 flex-row justify-between">
                       <Text className="text-xs text-gray-500">
                         SOL: {wallet.solBalance.toFixed(4)}
                       </Text>
                       {wallet.totalValueChange24h !== undefined && (
-                        <Text
+                        <Text 
                           className="text-xs"
-                          style={{
-                            color: wallet.totalValueChange24h >= 0 ? '#00D4AA' : '#EF4444',
+                          style={{ 
+                            color: wallet.totalValueChange24h >= 0 ? '#00D4AA' : '#EF4444' 
                           }}>
-                          24h: {wallet.totalValueChange24h >= 0 ? '+' : ''}$
-                          {wallet.totalValueChange24h.toFixed(2)}
+                          24h: {wallet.totalValueChange24h >= 0 ? '+' : ''}${wallet.totalValueChange24h.toFixed(2)}
                         </Text>
                       )}
                     </View>
@@ -418,7 +423,7 @@ export function PortfolioScreen() {
               <Ionicons name="list-outline" size={48} color="#8E8E93" />
               <Text className="mt-4 text-center text-gray-400">No assets found</Text>
               <Text className="mt-2 text-xs text-gray-500">
-                Your Turnkey wallet doesn&apos;t contain any tokens
+                Your Turnkey wallet doesn't contain any tokens
               </Text>
             </View>
           ) : (
@@ -429,11 +434,12 @@ export function PortfolioScreen() {
                 <TouchableOpacity
                   onPress={() => handleAssetPress(asset)}
                   className="mb-3 flex-row items-center rounded-2xl border border-dark-border bg-dark-card p-4">
+                  
                   {/* Token Icon */}
                   <View className="mr-4 h-12 w-12 items-center justify-center rounded-full bg-primary/20">
                     {asset.logoURI ? (
-                      <Image
-                        source={{ uri: asset.logoURI }}
+                      <Image 
+                        source={{ uri: asset.logoURI }} 
                         className="h-8 w-8 rounded-full"
                         onError={() => console.log('Failed to load token image:', asset.logoURI)}
                       />
@@ -448,9 +454,7 @@ export function PortfolioScreen() {
                     <View className="flex-row items-center justify-between">
                       <View>
                         <Text className="font-semibold text-white">{asset.symbol}</Text>
-                        <Text className="text-sm text-gray-400">
-                          {asset.name || 'Unknown Token'}
-                        </Text>
+                        <Text className="text-sm text-gray-400">{asset.name || 'Unknown Token'}</Text>
                       </View>
                       <View className="items-end">
                         <Text className="font-semibold text-white">
@@ -460,8 +464,7 @@ export function PortfolioScreen() {
                           {asset.uiAmount.toLocaleString(undefined, {
                             minimumFractionDigits: asset.symbol === 'SOL' ? 4 : 0,
                             maximumFractionDigits: asset.symbol === 'SOL' ? 4 : 6,
-                          })}{' '}
-                          {asset.symbol}
+                          })} {asset.symbol}
                         </Text>
                       </View>
                     </View>
@@ -471,13 +474,12 @@ export function PortfolioScreen() {
                         Price: ${(asset.price || 0).toFixed(asset.symbol === 'SOL' ? 2 : 6)}
                       </Text>
                       {asset.priceChange24h !== undefined && (
-                        <Text
+                        <Text 
                           className="text-xs"
-                          style={{
-                            color: asset.priceChange24h >= 0 ? '#00D4AA' : '#EF4444',
+                          style={{ 
+                            color: asset.priceChange24h >= 0 ? '#00D4AA' : '#EF4444' 
                           }}>
-                          {asset.priceChange24h >= 0 ? '+' : ''}
-                          {asset.priceChange24h.toFixed(2)}%
+                          {asset.priceChange24h >= 0 ? '+' : ''}{asset.priceChange24h.toFixed(2)}%
                         </Text>
                       )}
                     </View>
@@ -488,6 +490,42 @@ export function PortfolioScreen() {
               </Animated.View>
             ))
           )}
+        </Animated.View>
+
+        {/* Data Sources */}
+        <Animated.View entering={FadeInUp.duration(600).delay(400)} className="mb-8 px-4">
+          <Text className="mb-4 text-lg font-semibold text-white">Data Sources</Text>
+          <View className="rounded-xl border border-dark-border bg-dark-card p-4">
+            <View className="space-y-3">
+              <View className="flex-row justify-between">
+                <Text className="text-gray-400">Network</Text>
+                <Text className="text-white">Solana Mainnet</Text>
+              </View>
+              <View className="flex-row justify-between">
+                <Text className="text-gray-400">Wallet Data</Text>
+                <Text className="text-white">Turnkey</Text>
+              </View>
+              <View className="flex-row justify-between">
+                <Text className="text-gray-400">Balance & Prices</Text>
+                <Text className="text-white">GoldRush API</Text>
+              </View>
+              <View className="flex-row justify-between">
+                <Text className="text-gray-400">Price Updates</Text>
+                <Text className="text-white">Real-time</Text>
+              </View>
+              {isContractReady && (
+                <View className="flex-row justify-between">
+                  <Text className="text-gray-400">IntentFI Status</Text>
+                  <Text className="text-success">Connected</Text>
+                </View>
+              )}
+              <View className="border-t border-dark-border pt-3">
+                <Text className="text-center text-xs text-gray-500">
+                  Portfolio data powered by GoldRush API with real-time pricing and 24h changes
+                </Text>
+              </View>
+            </View>
+          </View>
         </Animated.View>
       </ScrollView>
     </SafeAreaView>
