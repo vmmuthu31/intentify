@@ -1,5 +1,14 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Dimensions, Alert, Modal, RefreshControl } from 'react-native';
+import {
+  View,
+  Text,
+  ScrollView,
+  TouchableOpacity,
+  Dimensions,
+  Alert,
+  Modal,
+  RefreshControl,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -26,7 +35,7 @@ const { width } = Dimensions.get('window');
 export function DashboardScreen() {
   // Turnkey authentication state
   const { isAuthenticated, user } = useTurnkeyAuth();
-  
+
   // Solana provider for intents (still using existing functionality)
   const { activeIntents } = useSolana();
 
@@ -55,22 +64,25 @@ export function DashboardScreen() {
     try {
       setIsLoading(true);
       setError(null);
-      
+
       console.log('🚀 Initializing dashboard for authenticated user...');
-      
+
       // Fetch real portfolio data from Turnkey wallets
       await fetchDashboardData();
-      
+
       // Initialize IntentFI SDK for additional stats
       try {
         await intentFiMobile.initialize('mainnet');
         setIsContractReady(true);
         console.log('✅ IntentFI SDK initialized for mainnet');
-        
+
         // Fetch contract data if available
         await fetchContractData();
       } catch (contractError) {
-        console.warn('⚠️ IntentFI SDK initialization failed, continuing without contract data:', contractError);
+        console.warn(
+          '⚠️ IntentFI SDK initialization failed, continuing without contract data:',
+          contractError
+        );
         setIsContractReady(false);
       }
 
@@ -86,10 +98,10 @@ export function DashboardScreen() {
   const fetchDashboardData = async () => {
     try {
       console.log('📊 Fetching dashboard data from Turnkey wallets...');
-      
+
       const data = await turnkeySolanaService.getPortfolioData();
       setPortfolioData(data);
-      
+
       console.log('✅ Dashboard data fetched successfully');
     } catch (error) {
       console.error('❌ Failed to fetch dashboard data:', error);
@@ -167,7 +179,10 @@ export function DashboardScreen() {
 
     switch (action.title) {
       case 'Swap':
-        Alert.alert('Swap Intent', 'Navigate to Intent tab to create swap intents with your Turnkey wallets');
+        Alert.alert(
+          'Swap Intent',
+          'Navigate to Intent tab to create swap intents with your Turnkey wallets'
+        );
         break;
       case 'Lend':
         Alert.alert('Lend Intent', 'Navigate to Intent tab to create lending intents');
@@ -231,8 +246,8 @@ export function DashboardScreen() {
   const portfolioChange = protocolStats
     ? `${(protocolStats.totalRaised / LAMPORTS_PER_SOL).toFixed(2)} SOL`
     : '$0.00';
-  const portfolioChangePercent = portfolioData?.wallets.length 
-    ? `+${(portfolioData.wallets.length * 1.2).toFixed(1)}%` 
+  const portfolioChangePercent = portfolioData?.wallets.length
+    ? `+${(portfolioData.wallets.length * 1.2).toFixed(1)}%`
     : '0%';
 
   const getStatusColor = (status: string) => {
@@ -265,7 +280,6 @@ export function DashboardScreen() {
             colors={['#FF4500']}
           />
         }>
-        
         {/* Header */}
         <Animated.View
           entering={FadeInUp.duration(600)}
@@ -276,7 +290,8 @@ export function DashboardScreen() {
               {user?.username || user?.email?.split('@')[0] || 'IntentFI'}
             </Text>
             <Text className="text-xs text-primary">
-              📡 Mainnet • {portfolioData?.wallets.length || 0} Wallet{portfolioData?.wallets.length !== 1 ? 's' : ''}
+              📡 Mainnet • {portfolioData?.wallets.length || 0} Wallet
+              {portfolioData?.wallets.length !== 1 ? 's' : ''}
             </Text>
           </View>
           <View className="flex-row items-center">
@@ -319,7 +334,14 @@ export function DashboardScreen() {
                   <Text className="text-sm text-white/90">
                     SOL: {portfolioData?.totalSolBalance.toFixed(4) || '0.0000'}
                   </Text>
-                  <Text className="ml-2 text-sm text-white/90">{portfolioChangePercent}</Text>
+                  <Text
+                    className="ml-2 text-sm text-white/90"
+                    style={{
+                      color:
+                        portfolioChange && parseFloat(portfolioChange) >= 0 ? '#00D4AA' : '#EF4444',
+                    }}>
+                    24h: {portfolioChangePercent}
+                  </Text>
                 </View>
                 <Text className="mt-1 text-xs text-white/70">
                   {portfolioData?.allTokenBalances.length || 0} different assets
@@ -479,7 +501,8 @@ export function DashboardScreen() {
                 <View>
                   <Text className="font-medium text-white">Turnkey Wallets Connected</Text>
                   <Text className="text-xs text-gray-400">
-                    {portfolioData?.wallets.length || 0} wallet{portfolioData?.wallets.length !== 1 ? 's' : ''} • Mainnet
+                    {portfolioData?.wallets.length || 0} wallet
+                    {portfolioData?.wallets.length !== 1 ? 's' : ''} • Mainnet
                   </Text>
                 </View>
               </View>
@@ -487,7 +510,7 @@ export function DashboardScreen() {
             </View>
 
             {portfolioData?.wallets.slice(0, 2).map((wallet, index) => (
-              <View key={wallet.walletId} className="border-t border-dark-border pt-3 mt-3">
+              <View key={wallet.walletId} className="mt-3 border-t border-dark-border pt-3">
                 <Text className="text-xs text-gray-400">
                   {wallet.walletName}: {wallet.address.slice(0, 8)}...{wallet.address.slice(-8)}
                 </Text>
@@ -497,7 +520,7 @@ export function DashboardScreen() {
               </View>
             ))}
 
-            <View className="border-t border-dark-border pt-3 mt-3">
+            <View className="mt-3 border-t border-dark-border pt-3">
               <Text className="text-center text-xs text-gray-500">
                 Real-time data from Solana Mainnet via Turnkey authentication
               </Text>

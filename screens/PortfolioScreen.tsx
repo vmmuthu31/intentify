@@ -49,9 +49,9 @@ export function PortfolioScreen() {
       setIsLoading(true);
       setError(null);
 
-      console.log('🔄 Initializing portfolio data for authenticated user...');
+      console.log('🔄 Initializing portfolio data with GoldRush API...');
 
-      // Fetch real portfolio data from Turnkey wallets
+      // Fetch real portfolio data from Turnkey wallets using GoldRush
       await fetchPortfolioData();
 
       // Initialize IntentFI SDK for additional stats
@@ -67,7 +67,7 @@ export function PortfolioScreen() {
         setIsContractReady(false);
       }
 
-      console.log('✅ Portfolio data initialized');
+      console.log('✅ Portfolio data initialized with GoldRush');
     } catch (error) {
       console.error('❌ Failed to initialize portfolio:', error);
       setError(error instanceof Error ? error.message : 'Failed to load portfolio data');
@@ -78,7 +78,7 @@ export function PortfolioScreen() {
 
   const fetchPortfolioData = async () => {
     try {
-      console.log('📊 Fetching real portfolio data from Turnkey wallets...');
+      console.log('📊 Fetching real portfolio data from GoldRush API...');
 
       const data = await turnkeySolanaService.getPortfolioData();
       setPortfolioData(data);
@@ -86,17 +86,19 @@ export function PortfolioScreen() {
       // Calculate portfolio stats
       const stats = {
         totalValue: data.totalPortfolioValue,
+        totalValueChange24h: data.totalValueChange24h,
         solValue: data.totalSolBalance,
         tokenValue: data.totalTokenValue,
         walletCount: data.wallets.length,
         tokenCount: data.allTokenBalances.length,
         largestHolding: data.allTokenBalances.reduce(
           (largest, token) => {
-            const value = token.uiAmount * (token.price || 0);
+            const value = token.value || 0;
             return value > largest.value ? { symbol: token.symbol, value } : largest;
           },
           { symbol: 'N/A', value: 0 }
         ),
+        lastUpdated: data.lastUpdated,
       };
 
       setPortfolioStats(stats);
@@ -111,7 +113,7 @@ export function PortfolioScreen() {
         }
       }
 
-      console.log('✅ Portfolio data fetched successfully');
+      console.log('✅ Portfolio data fetched successfully from GoldRush');
     } catch (error) {
       console.error('❌ Failed to fetch portfolio data:', error);
       throw error;
@@ -121,6 +123,8 @@ export function PortfolioScreen() {
   const handleRefresh = async () => {
     setIsRefreshing(true);
     try {
+      // Clear cache to force fresh data
+      turnkeySolanaService.clearCache();
       await fetchPortfolioData();
     } catch (error) {
       console.error('❌ Failed to refresh portfolio:', error);
@@ -131,10 +135,13 @@ export function PortfolioScreen() {
   };
 
   const handleAssetPress = (asset: TurnkeyTokenBalance) => {
-    const value = asset.uiAmount * (asset.price || 0);
+    const value = asset.value || 0;
+    const change24h = asset.valueChange24h || 0;
+    const priceChange = asset.priceChange24h || 0;
+
     Alert.alert(
       `${asset.name || asset.symbol}`,
-      `Symbol: ${asset.symbol}\nBalance: ${asset.uiAmount.toLocaleString()} ${asset.symbol}\nValue: $${value.toFixed(2)}\nPrice: $${(asset.price || 0).toFixed(asset.symbol === 'SOL' ? 2 : 6)}\n\nMint: ${asset.mint.slice(0, 20)}...`,
+      `Symbol: ${asset.symbol}\nBalance: ${asset.uiAmount.toLocaleString()} ${asset.symbol}\nValue: $${value.toFixed(2)}\nPrice: $${(asset.price || 0).toFixed(asset.symbol === 'SOL' ? 2 : 6)}\n24h Change: ${priceChange >= 0 ? '+' : ''}${priceChange.toFixed(2)}%\n\nMint: ${asset.mint.slice(0, 20)}...`,
       [
         { text: 'OK' },
         {
@@ -147,9 +154,10 @@ export function PortfolioScreen() {
   };
 
   const handleWalletPress = (wallet: TurnkeyWalletData) => {
+    const change24h = wallet.totalValueChange24h || 0;
     Alert.alert(
       wallet.walletName,
-      `Address: ${wallet.address.slice(0, 20)}...\nSOL Balance: ${wallet.solBalance.toFixed(4)} SOL\nToken Count: ${wallet.tokenBalances.length}\nTotal Value: $${wallet.totalValue.toFixed(2)}`,
+      `Address: ${wallet.address.slice(0, 20)}...\nSOL Balance: ${wallet.solBalance.toFixed(4)} SOL\nToken Count: ${wallet.tokenBalances.length}\nTotal Value: $${wallet.totalValue.toFixed(2)}\n24h Change: ${change24h >= 0 ? '+' : ''}$${change24h.toFixed(2)}\nLast Updated: ${new Date(wallet.lastUpdated).toLocaleString()}`,
       [
         { text: 'OK' },
         {
@@ -173,18 +181,19 @@ export function PortfolioScreen() {
   };
 
   const getPortfolioChange = () => {
-    if (!portfolioStats) return { value: '$0.00', percent: '0%', color: '#8E8E93' };
+    if (!portfolioData || portfolioData.totalValueChange24h === undefined) {
+      return { value: '$0.00', percent: '0%', color: '#8E8E93' };
+    }
 
-    // Calculate 24h change based on SOL price movement (simplified)
-    const solValue = portfolioStats.solValue * 189; // Approximate SOL price
-    const changeValue = solValue * 0.024; // Assume 2.4% daily change
-    const changePercent = portfolioData
-      ? ((changeValue / portfolioData.totalPortfolioValue) * 100).toFixed(1)
-      : '0.0';
+    const changeValue = portfolioData.totalValueChange24h;
+    const changePercent =
+      portfolioData.totalPortfolioValue > 0
+        ? ((changeValue / portfolioData.totalPortfolioValue) * 100).toFixed(1)
+        : '0.0';
 
     return {
       value: `$${Math.abs(changeValue).toFixed(2)}`,
-      percent: `+${changePercent}%`,
+      percent: `${changeValue >= 0 ? '+' : ''}${changePercent}%`,
       color: changeValue >= 0 ? '#00D4AA' : '#EF4444',
     };
   };
@@ -196,7 +205,7 @@ export function PortfolioScreen() {
         <View className="flex-1 items-center justify-center">
           <Ionicons name="wallet" size={48} color="#FF4500" />
           <Text className="mt-4 text-lg text-white">Loading Portfolio...</Text>
-          <Text className="mt-2 text-sm text-gray-400">Fetching your Turnkey wallet</Text>
+          <Text className="mt-2 text-sm text-gray-400">Fetching data from GoldRush API</Text>
         </View>
       </SafeAreaView>
     );
@@ -248,7 +257,7 @@ export function PortfolioScreen() {
         <View>
           <Text className="text-2xl font-bold text-white">Portfolio</Text>
           <Text className="text-sm text-gray-400">
-            {wallets.length > 0 ? 'Your Solana Wallet' : 'No Wallets'} • Mainnet
+            {wallets.length > 0 ? 'Your Solana Wallet' : 'No Wallets'} • GoldRush API
           </Text>
         </View>
         <TouchableOpacity onPress={handleRefresh} className="p-2">
@@ -284,7 +293,7 @@ export function PortfolioScreen() {
                 {portfolioChange.value}
               </Text>
               <Text className="ml-2 text-sm" style={{ color: portfolioChange.color }}>
-                ({portfolioChange.percent})
+                ({portfolioChange.percent}) 24h
               </Text>
             </View>
             {portfolioStats && (
@@ -296,8 +305,12 @@ export function PortfolioScreen() {
                   </Text>
                 </View>
                 <View>
-                  <Text className="text-xs text-gray-500">Largest Holding</Text>
-                  <Text className="text-sm text-white">{portfolioStats.largestHolding.symbol}</Text>
+                  <Text className="text-xs text-gray-500">Last Updated</Text>
+                  <Text className="text-sm text-white">
+                    {portfolioStats.lastUpdated
+                      ? new Date(portfolioStats.lastUpdated).toLocaleTimeString()
+                      : 'Now'}
+                  </Text>
                 </View>
               </View>
             )}
@@ -376,7 +389,16 @@ export function PortfolioScreen() {
                       <Text className="text-xs text-gray-500">
                         SOL: {wallet.solBalance.toFixed(4)}
                       </Text>
-                      <Text className="text-xs text-gray-500">Mainnet</Text>
+                      {wallet.totalValueChange24h !== undefined && (
+                        <Text
+                          className="text-xs"
+                          style={{
+                            color: wallet.totalValueChange24h >= 0 ? '#00D4AA' : '#EF4444',
+                          }}>
+                          24h: {wallet.totalValueChange24h >= 0 ? '+' : ''}$
+                          {wallet.totalValueChange24h.toFixed(2)}
+                        </Text>
+                      )}
                     </View>
                   </View>
 
@@ -432,7 +454,7 @@ export function PortfolioScreen() {
                       </View>
                       <View className="items-end">
                         <Text className="font-semibold text-white">
-                          ${(asset.uiAmount * (asset.price || 0)).toFixed(2)}
+                          ${(asset.value || 0).toFixed(2)}
                         </Text>
                         <Text className="text-sm text-gray-400">
                           {asset.uiAmount.toLocaleString(undefined, {
@@ -448,7 +470,16 @@ export function PortfolioScreen() {
                       <Text className="text-xs text-gray-500">
                         Price: ${(asset.price || 0).toFixed(asset.symbol === 'SOL' ? 2 : 6)}
                       </Text>
-                      <Text className="text-xs text-gray-500">Mainnet • Real-time</Text>
+                      {asset.priceChange24h !== undefined && (
+                        <Text
+                          className="text-xs"
+                          style={{
+                            color: asset.priceChange24h >= 0 ? '#00D4AA' : '#EF4444',
+                          }}>
+                          {asset.priceChange24h >= 0 ? '+' : ''}
+                          {asset.priceChange24h.toFixed(2)}%
+                        </Text>
+                      )}
                     </View>
                   </View>
 
@@ -461,7 +492,7 @@ export function PortfolioScreen() {
 
         {/* Network Information */}
         <Animated.View entering={FadeInUp.duration(600).delay(400)} className="mb-8 px-4">
-          <Text className="mb-4 text-lg font-semibold text-white">Network Information</Text>
+          <Text className="mb-4 text-lg font-semibold text-white">Data Sources</Text>
           <View className="rounded-xl border border-dark-border bg-dark-card p-4">
             <View className="space-y-3">
               <View className="flex-row justify-between">
@@ -469,12 +500,16 @@ export function PortfolioScreen() {
                 <Text className="text-white">Solana Mainnet</Text>
               </View>
               <View className="flex-row justify-between">
-                <Text className="text-gray-400">Data Source</Text>
-                <Text className="text-white">Turnkey Wallet</Text>
+                <Text className="text-gray-400">Wallet Data</Text>
+                <Text className="text-white">Turnkey</Text>
               </View>
               <View className="flex-row justify-between">
-                <Text className="text-gray-400">Price Feed</Text>
-                <Text className="text-white">Fallback Prices</Text>
+                <Text className="text-gray-400">Balance & Prices</Text>
+                <Text className="text-white">GoldRush API</Text>
+              </View>
+              <View className="flex-row justify-between">
+                <Text className="text-gray-400">Price Updates</Text>
+                <Text className="text-white">Real-time</Text>
               </View>
               {isContractReady && (
                 <View className="flex-row justify-between">
@@ -484,7 +519,7 @@ export function PortfolioScreen() {
               )}
               <View className="border-t border-dark-border pt-3">
                 <Text className="text-center text-xs text-gray-500">
-                  Portfolio data from your authenticated Turnkey wallet on Solana mainnet
+                  Portfolio data powered by GoldRush API with real-time pricing and 24h changes
                 </Text>
               </View>
             </View>
