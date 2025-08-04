@@ -1,8 +1,8 @@
-# IntentiFi 🚀
+# IntentiFi
 
 **AI-Powered DeFi Assistant for Solana Mobile**
 
-_Solana Mobile Hackathon 2025 Submission_
+*Solana Mobile Hackathon 2025 Submission*
 
 [![GitHub](https://img.shields.io/badge/GitHub-Repository-blue?logo=github)](https://github.com/vmmuthu31/intentify)
 [![Solana](https://img.shields.io/badge/Built%20on-Solana-purple?logo=solana)](https://solana.com)
@@ -11,22 +11,22 @@ _Solana Mobile Hackathon 2025 Submission_
 
 ---
 
-## 🌟 Overview
+## Overview
 
-**IntentiFi** revolutionizes decentralized finance on Solana by combining **natural language processing** with **AI-powered execution**. Users can simply speak or type what they want to do in DeFi, and IntentiFi executes it safely in one tap.
+IntentiFi revolutionizes decentralized finance on Solana by combining natural language processing with AI-powered execution. Users can interact with DeFi protocols using plain English commands, which are then executed safely and efficiently.
 
-### 🎯 Key Features
+### Key Features
 
-- **🗣️ Natural Language Commands**: "Swap 1 SOL to USDC" - that's it!
-- **🤖 AI-Powered Execution**: Advanced AI understands intent and executes safely
-- **🛡️ Real-time Scam Protection**: Built-in security against malicious transactions
-- **📊 Smart Portfolio Analysis**: AI-driven insights and recommendations
-- **⚡ One-Tap Execution**: Complex DeFi operations simplified to single interactions
-- **🔐 Secure Wallet Integration**: Turnkey infrastructure with biometric authentication
+- **Natural Language Commands**: Execute DeFi operations using conversational language
+- **AI-Powered Execution**: Advanced AI understands user intent and executes transactions safely
+- **Real-time Scam Protection**: Built-in security mechanisms against malicious transactions
+- **Smart Portfolio Analysis**: AI-driven insights and investment recommendations
+- **One-Tap Execution**: Simplified interaction model for complex DeFi operations
+- **Secure Wallet Integration**: Turnkey infrastructure with biometric authentication
 
 ---
 
-## 📱 Screenshots
+## Screenshots
 
 <div align="center">
   <img src="./assets/DashboardScreen.jpeg" width="200" alt="Dashboard" />
@@ -42,7 +42,7 @@ _Solana Mobile Hackathon 2025 Submission_
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
 ### System Architecture
 
@@ -129,7 +129,7 @@ sequenceDiagram
 
 ---
 
-## 🛠️ Technical Stack
+## Technical Stack
 
 ### Frontend
 
@@ -169,7 +169,7 @@ sequenceDiagram
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
 
@@ -231,7 +231,7 @@ eas build --platform android
 
 ---
 
-## 💡 How It Works
+## How It Works
 
 ### 1. Natural Language Processing
 
@@ -269,7 +269,7 @@ Once intent is confirmed:
 
 ---
 
-## 🔐 Security Features
+## Security Features
 
 ### Multi-Layer Security
 
@@ -288,7 +288,7 @@ Once intent is confirmed:
 
 ---
 
-## 🎨 User Experience
+## User Experience
 
 ### Intuitive Design
 
@@ -306,7 +306,7 @@ Once intent is confirmed:
 
 ---
 
-## 🧪 Testing
+## Testing
 
 ### Unit Tests
 
@@ -328,7 +328,7 @@ npm run test:e2e
 
 ---
 
-## 📊 Performance Metrics
+## Performance Metrics
 
 - **App Launch Time**: < 2 seconds
 - **Intent Processing**: < 500ms
@@ -338,9 +338,9 @@ npm run test:e2e
 
 ---
 
-## 🛣️ Roadmap
+## Roadmap
 
-### Phase 1 (Current) ✅
+### Phase 1 (Current)
 
 - [x] Natural language swap execution
 - [x] AI-powered intent recognition
@@ -366,7 +366,7 @@ npm run test:e2e
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
 
@@ -380,18 +380,18 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 
 ---
 
-## 📄 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ---
 
-## 🏆 Hackathon Submission
+## Hackathon Submission
 
 ### Solana Mobile Hackathon 2025
 
-**Team**: IntentiFi Team
-**Category**: DeFi & Mobile
+**Team**: IntentiFi Team  
+**Category**: DeFi & Mobile  
 **Submission Date**: January 2025
 
 ### Key Innovations
@@ -412,7 +412,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-## 📞 Contact
+## Contact
 
 - **GitHub**: [vmmuthu31/intentify](https://github.com/vmmuthu31/intentify)
 - **Website**: [Site](https://www.intentifi.xyz)
@@ -420,17 +420,16 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
-- **Solana Foundation** for the amazing blockchain infrastructure
+- **Solana Foundation** for the blockchain infrastructure
 - **Turnkey** for secure wallet infrastructure
-- **Groq** for lightning-fast AI inference
+- **Groq** for AI inference capabilities
 - **Jupiter** for optimal swap routing
-- **Expo** for excellent mobile development tools
+- **Expo** for mobile development tools
 
 ---
 
 <div align="center">
-  <h3>🚀 Built with ❤️ for the Solana ecosystem</h3>
   <p><strong>IntentiFi - Making DeFi as easy as speaking</strong></p>
 </div>
