@@ -1,851 +1,695 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
   ScrollView,
   TouchableOpacity,
-  Dimensions,
-  Modal,
+  TextInput,
   Alert,
+  Image,
   Linking,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withSpring,
-  FadeInUp,
-  SlideInRight,
-} from 'react-native-reanimated';
-import { LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { LinearGradient } from 'expo-linear-gradient';
+import Animated, { FadeInUp, FadeInLeft, BounceIn } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 
-// Import components
-import { FloatingActionButton } from '../components/FloatingActionButton';
-import { IntentBuilder } from '../components/IntentBuilder';
-import { PullToRefresh } from '../components/PullToRefresh';
+// Import services
+import { useTurnkeyAuth } from '../providers/TurnkeyAuthProvider';
+import { turnkeySolanaService, TurnkeyTokenBalance } from '../services/turnkey-solana-service';
+import { intentApiService, IntentToken, QuoteResponse } from '../services/intent-api-service';
 
-// Import IntentFI services
-import { intentFiMobile, networkService, transactionService } from '../services';
-import { useSolana } from '../providers/SolanaProvider';
-import { usePhantomWallet } from '../providers/PhantomProvider';
+interface ChatMessage {
+  id: string;
+  type: 'user' | 'bot' | 'system';
+  content: string;
+  timestamp: Date;
+  data?: any;
+}
 
-// Import types
-import type { UserProfile, IntentBuilderData } from '../types';
-
-const { width } = Dimensions.get('window');
+interface SwapState {
+  step: 'idle' | 'selecting_from' | 'selecting_to' | 'entering_amount' | 'confirming' | 'executing';
+  fromToken?: IntentToken;
+  toToken?: IntentToken;
+  amount?: string;
+  quote?: QuoteResponse['quote'][0];
+  userTokens?: TurnkeyTokenBalance[];
+}
 
 export function IntentScreen() {
-  const {
-    publicKey,
-    connected,
-    balance,
-    refreshBalances,
-    executeSwapIntent,
-    executeLendIntent,
-    activeIntents,
-  } = useSolana();
-  const { sharedSecret, session, dappKeyPair, signTransaction } = usePhantomWallet();
+  const { isAuthenticated, user } = useTurnkeyAuth();
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [inputText, setInputText] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [availableTokens, setAvailableTokens] = useState<IntentToken[]>([]);
+  const [userTokens, setUserTokens] = useState<TurnkeyTokenBalance[]>([]);
+  const [swapState, setSwapState] = useState<SwapState>({ step: 'idle' });
+  const scrollViewRef = useRef<ScrollView>(null);
 
-  const [selectedTab, setSelectedTab] = useState(0);
-  const [showIntentBuilder, setShowIntentBuilder] = useState(false);
-  const [builderIntentType, setBuilderIntentType] = useState<'swap' | 'buy' | 'lend' | 'launch'>(
-    'swap'
-  );
-
-  // IntentFI state
-  const [isInitialized, setIsInitialized] = useState(false);
-  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [recentIntents, setRecentIntents] = useState<any[]>([]);
-
-  const translateX = useSharedValue(0);
-
-  const intentTypes = [
-    {
-      id: 0,
-      title: 'Swap',
-      icon: 'swap-horizontal',
-      description: 'Exchange tokens instantly on devnet',
-    },
-    { id: 1, title: 'Buy', icon: 'card', description: 'Purchase crypto with fiat (coming soon)' },
-    { id: 2, title: 'Lend', icon: 'trending-up', description: 'Earn yield on your assets' },
-    { id: 3, title: 'Launch', icon: 'rocket', description: 'Launch new tokens on launchpad' },
-  ];
-
-  const swapExamples = [
-    { from: 'SOL', to: 'USDC', description: 'Swap at best price (simulated)', amount: '10 SOL' },
-    { from: 'USDC', to: 'SOL', description: 'Auto-route with low slippage', amount: '$500' },
-    { from: 'SOL', to: 'BONK', description: 'Test swap on devnet', amount: '5 SOL' },
-  ];
-
-  const fetchUserProfile = useCallback(async () => {
-    if (!publicKey) return;
-
-    const timeout = (ms: number) =>
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error(`Timeout after ${ms / 1000} seconds`)), ms)
-      );
-
-    try {
-      console.log('👤 Fetching user profile...');
-      console.log('👤 Public key:', publicKey.toString());
-
-      const [userAccountPDA] =
-        await intentFiMobile.advancedSDK.intentFi.getUserAccountPDA(publicKey);
-      console.log('👤 User Account PDA:', userAccountPDA.toString());
-
-      const userAccountInfo = await networkService.getConnection().getAccountInfo(userAccountPDA);
-
-      if (userAccountInfo) {
-        console.log('✅ User account PDA exists!');
-        console.log('📦 Account data length:', userAccountInfo.data.length);
-        console.log('👑 Account owner:', userAccountInfo.owner.toString());
-
-        const basicProfile: UserProfile = {
-          account: {
-            authority: publicKey,
-            activeIntents: 0,
-            totalIntentsCreated: 0,
-            totalVolume: 0,
-          },
-          intents: [],
-          network: 'devnet',
-          isMainnet: false,
-        };
-
-        console.log('✅ Creating basic profile from existing account');
-        setUserProfile(basicProfile);
-        setRecentIntents([]);
-
-        // Background full profile fetch
-        setTimeout(async () => {
-          try {
-            const fullProfile = (await Promise.race([
-              intentFiMobile.getUserProfile(publicKey),
-              timeout(5000),
-            ])) as UserProfile;
-
-            console.log('✅ Background profile fetch successful');
-            setUserProfile(fullProfile);
-
-            if (fullProfile?.intents) {
-              const formattedIntents = fullProfile.intents.map((intent: any, index: number) => ({
-                id: index + 1,
-                type: intent.intentType,
-                description: `${intent.intentType} ${intent.amount / LAMPORTS_PER_SOL} SOL`,
-                status: intent.status.toLowerCase(),
-                timestamp: new Date(intent.createdAt * 1000).toLocaleString(),
-                value: `${intent.amount / LAMPORTS_PER_SOL} SOL`,
-              }));
-              setRecentIntents(formattedIntents);
-              console.log('👤 Formatted intents:', formattedIntents.length);
-            } else {
-              console.log('👤 No intents found in profile');
-              setRecentIntents([]);
-            }
-          } catch {
-            console.log('⚠️ Background profile fetch failed, keeping basic profile');
-          }
-        }, 200);
-
-        return;
-      }
-
-      // User account doesn't exist
-      console.log('❌ User account PDA does not exist yet');
-      const emptyProfile: UserProfile = {
-        account: null,
-        intents: [],
-        network: 'devnet',
-        isMainnet: false,
-      };
-      setUserProfile(emptyProfile);
-      setRecentIntents([]);
-      console.log('✅ Set empty user profile (account not created yet)');
-    } catch (error: any) {
-      console.error('❌ Failed to fetch user profile:', error);
-      console.error('❌ Error message:', error?.message);
-
-      const fallbackProfile: UserProfile = {
-        account: null,
-        intents: [],
-        network: 'devnet',
-        isMainnet: false,
-      };
-      setUserProfile(fallbackProfile);
-      setRecentIntents([]);
-      console.log('⚠️ Set fallback empty profile due to error');
+  useEffect(() => {
+    if (isAuthenticated && user) {
+      initializeChat();
     }
-  }, [publicKey]);
+  }, [isAuthenticated, user]);
 
-  const initializeIntentFI = useCallback(async () => {
-    if (!publicKey) return;
-
+  const initializeChat = async () => {
     try {
-      setLoading(true);
-      // Initialize SDK for devnet
-      await intentFiMobile.initialize('devnet');
-      console.log('✅ IntentFI SDK initialized on devnet');
-      console.log('👤 Using connected wallet:', publicKey.toString().slice(0, 8) + '...');
-      setIsInitialized(true);
-      await fetchUserProfile();
-    } catch (error) {
-      console.error('❌ Failed to initialize IntentFI:', error);
-      Alert.alert('Error', 'Failed to initialize IntentFI SDK');
-    } finally {
-      setLoading(false);
-    }
-  }, [publicKey, fetchUserProfile]);
+      setIsLoading(true);
 
-  const initializeUserAccount = async () => {
-    if (!publicKey || !connected) {
-      Alert.alert('No Wallet', 'Please connect your wallet first');
-      return;
-    }
-
-    try {
-      setLoading(true);
-      // Check wallet status
-      const walletStatus = await transactionService.getWalletStatusMessage(publicKey);
-      console.log('💳 Wallet status:', walletStatus);
-
-      // Prepare wallet for transaction
-      const isReady = await transactionService.prepareWalletForTransaction(
-        publicKey,
-        0.01 // Need at least 0.01 SOL for initialization
-      );
-
-      if (!isReady) {
-        Alert.alert(
-          'Need Wallet Funding 💰',
-          `${walletStatus}\n\nYour wallet needs SOL to activate your IntentFI account.`,
-          [
-            { text: 'Cancel', style: 'cancel' },
-            { text: 'Auto-Fund', onPress: () => attemptFunding() },
-          ]
-        );
-        return;
-      }
-
-      console.log('🚀 Wallet ready, checking protocol state...');
-
-      // Check if protocol state exists
-      const [protocolStatePDA] = await intentFiMobile.advancedSDK.intentFi.getProtocolStatePDA();
-      const protocolStateInfo = await networkService
-        .getConnection()
-        .getAccountInfo(protocolStatePDA);
-
-      if (!protocolStateInfo) {
-        console.log('⚠️ Protocol state not found, this might be the issue');
-        Alert.alert(
-          'Protocol Not Initialized',
-          'The IntentFI protocol has not been initialized on devnet yet. This could be why the transaction is failing.',
-          [
-            { text: 'OK' },
-            {
-              text: 'Try Anyway',
-              onPress: async () => {
-                console.log('🔄 User chose to try anyway, proceeding...');
-                await proceedWithUserInitialization();
-              },
-            },
-          ]
-        );
-        return;
-      }
-
-      console.log('✅ Protocol state found, proceeding with user initialization');
-      await proceedWithUserInitialization();
-    } catch (error: any) {
-      console.error('❌ Failed to check protocol state:', error);
-
-      // Still try to proceed - the error might be something else
-      console.log('🔄 Proceeding despite protocol check error...');
-      await proceedWithUserInitialization();
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const proceedWithUserInitialization = async () => {
-    try {
-      console.log('🚀 Creating IntentFI user initialization transaction...');
-
-      // Ensure publicKey is not null before proceeding
-      if (!publicKey) {
-        console.error('❌ PublicKey is null, cannot proceed');
-        Alert.alert('Error', 'Wallet public key is not available. Please reconnect your wallet.');
-        return;
-      }
-
-      // Create the actual IntentFI user initialization transaction
-      const transaction = await intentFiMobile.advancedSDK.intentFi.initializeUser(publicKey);
-
-      console.log('📦 IntentFI user initialization transaction created');
-      console.log('🔧 Transaction details:', {
-        instructionCount: transaction.instructions.length,
-        programId: networkService.getIntentFiProgramId().toString(),
-      });
-
-      // Log the accounts in the instruction for debugging
-      if (transaction.instructions.length > 0) {
-        const instruction = transaction.instructions[0];
-        console.log(
-          '🔍 Instruction accounts:',
-          instruction.keys.map((key) => ({
-            pubkey: key.pubkey.toString(),
-            isSigner: key.isSigner,
-            isWritable: key.isWritable,
-          }))
-        );
-
-        // Also check if the user account PDA already exists
-        const [userAccountPDA] =
-          await intentFiMobile.advancedSDK.intentFi.getUserAccountPDA(publicKey);
-        console.log('👤 User Account PDA:', userAccountPDA.toString());
-
-        const userAccountInfo = await networkService.getConnection().getAccountInfo(userAccountPDA);
-        if (userAccountInfo) {
-          console.log(
-            '⚠️ User account already exists! This might be why initialization is failing.'
-          );
-          console.log('📦 Existing account data length:', userAccountInfo.data.length);
-          console.log('👑 Account owner:', userAccountInfo.owner.toString());
-        } else {
-          console.log('✅ User account does not exist yet - initialization should work');
-        }
-      }
-
-      // Use the signTransaction function from PhantomProvider
-      if (signTransaction) {
-        const result = await signTransaction(transaction, async () => {
-          // This callback will be called when the transaction is successfully processed
-          console.log('🔄 Transaction successful, refreshing user profile...');
-          await fetchUserProfile();
-          await refreshBalances();
-          console.log('✅ User profile refreshed after successful initialization');
-        });
-
-        if (result) {
-          console.log('✅ Transaction sent to Phantom for signing:', result);
-          Alert.alert(
-            'Account Initialization',
-            'IntentFI user account initialization sent to Phantom for signing. Please check your wallet app.',
-            [{ text: 'OK' }]
-          );
-
-          // Also refresh after a delay to catch successful transactions
-          setTimeout(async () => {
-            console.log('🔄 Auto-refreshing user profile after transaction...');
-            await fetchUserProfile();
-            await refreshBalances();
-          }, 3000); // Wait 3 seconds for transaction to be processed
-        } else {
-          console.error('❌ Transaction signing failed or was rejected');
-          Alert.alert('Transaction Failed', 'Failed to sign the transaction. Please try again.', [
-            { text: 'OK' },
-          ]);
-        }
-      } else {
-        console.error('❌ signTransaction function not available');
-        Alert.alert(
-          'Wallet Error',
-          'Unable to send transaction to Phantom. Please reconnect your wallet.',
-          [{ text: 'OK' }]
-        );
-      }
-    } catch (error: any) {
-      console.error('❌ Failed to initialize user:', error);
-
-      // Better error messaging
-      let errorMessage = 'Failed to initialize user account';
-      if (error.message && error.message.includes('Attempt to debit an account')) {
-        errorMessage =
-          'Insufficient SOL for transaction fees.\n\nPlease fund your wallet or use Quick Demo mode.';
-      } else if (error.message) {
-        errorMessage = error.message;
-      }
-
-      Alert.alert('Initialization Failed', errorMessage, [
-        { text: 'OK' },
-        { text: 'Try Again', onPress: initializeUserAccount },
+      // Fetch available tokens and user portfolio
+      const [tokensResponse, portfolioData] = await Promise.all([
+        intentApiService.getTokens(),
+        turnkeySolanaService.getPortfolioData(),
       ]);
-    }
-  };
 
-  useEffect(() => {
-    if (publicKey && connected) {
-      initializeIntentFI();
-    }
-  }, [publicKey, connected, initializeIntentFI]);
-
-  useEffect(() => {
-    if (sharedSecret && session && dappKeyPair) {
-      console.log('🔑 Shared secret:', sharedSecret);
-      console.log('🔑 Session:', session);
-      console.log('🔑 Dapp key pair:', dappKeyPair);
-    }
-  }, [sharedSecret, session, dappKeyPair]);
-
-  useEffect(() => {
-    if (publicKey && connected && isInitialized) {
-      testProtocolState();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [publicKey, connected, isInitialized]);
-
-  const attemptFunding = async () => {
-    if (!publicKey || !connected) return;
-
-    try {
-      console.log('💧 Attempting to fund wallet...');
-      const fundingSuccess = await intentFiMobile.ensureWalletFunded(publicKey, 0.05);
-
-      if (fundingSuccess) {
-        Alert.alert(
-          'Funding Successful! 💰',
-          'Your wallet has been funded. You can now initialize your account.',
-          [{ text: 'Initialize Now', onPress: initializeUserAccount }]
-        );
-      } else {
-        Alert.alert(
-          'Auto-Funding Failed',
-          'Unable to fund wallet automatically due to rate limits. Please try again later.',
-          [{ text: 'OK' }]
-        );
+      if (tokensResponse.success) {
+        setAvailableTokens(tokensResponse.tokens);
       }
+
+      if (portfolioData.wallets.length > 0) {
+        setUserTokens(portfolioData.allTokenBalances);
+      }
+
+      // Add welcome message
+      addBotMessage(
+        `👋 Welcome to IntentFI! I'm here to help you swap tokens on Solana.\n\n💡 Just tell me what you want to do, like:\n• "Swap 1 SOL to USDC"\n• "Exchange MELANIA for SOL"\n• "I want to swap tokens"\n\nWhat would you like to do today?`
+      );
     } catch (error) {
-      console.error('Funding attempt failed:', error);
-      Alert.alert('Funding Error', 'Automatic funding failed. Please try again later.', [
-        { text: 'OK' },
-      ]);
+      console.error('❌ Failed to initialize chat:', error);
+      addBotMessage('❌ Sorry, I had trouble loading. Please try refreshing the screen.');
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const animatedTabStyle = useAnimatedStyle(() => {
-    return {
-      transform: [{ translateX: translateX.value }],
+  const addMessage = (message: Omit<ChatMessage, 'id' | 'timestamp'>) => {
+    const newMessage: ChatMessage = {
+      ...message,
+      id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      timestamp: new Date(),
     };
-  });
+    setMessages((prev) => [...prev, newMessage]);
 
-  const handleTabPress = (index: number) => {
-    setSelectedTab(index);
-    translateX.value = withSpring(index * (width / 4), {
-      damping: 20,
-      stiffness: 90,
-    });
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-  };
-
-  const handleTemplatePress = (template: any) => {
-    if (!publicKey || !connected) {
-      Alert.alert('Setup Required', 'Please connect your wallet first');
-      return;
-    }
-
-    if (!userProfile?.account) {
-      Alert.alert('Setup Required', 'Please initialize your user account first');
-      return;
-    }
-
-    setBuilderIntentType('swap');
-    setShowIntentBuilder(true);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-  };
-
-  const handleFABPress = () => {
-    console.log('🎯 FAB pressed');
-    console.log('🔍 Current state:', {
-      publicKey: !!publicKey,
-      connected,
-      userProfileAccount: !!userProfile?.account,
-      selectedTab,
-      showIntentBuilder,
-    });
-
-    if (!publicKey || !connected) {
-      Alert.alert('Setup Required', 'Please connect your wallet first');
-      return;
-    }
-
-    if (!userProfile?.account) {
-      Alert.alert('Setup Required', 'Please initialize your user account first');
-      return;
-    }
-
-    const intentType = intentTypes[selectedTab].title.toLowerCase() as any;
-    console.log('🎯 Setting intent type:', intentType);
-
-    setBuilderIntentType(intentType);
-
-    // Small delay to ensure component is ready
+    // Auto-scroll to bottom
     setTimeout(() => {
-      setShowIntentBuilder(true);
-      console.log('🎯 Modal should now be visible');
+      scrollViewRef.current?.scrollToEnd({ animated: true });
     }, 100);
   };
 
-  const handleCreateIntent = async (intentData: IntentBuilderData) => {
-    console.log('📝 IntentScreen.handleCreateIntent called with:', intentData);
+  const addBotMessage = (content: string, data?: any) => {
+    addMessage({ type: 'bot', content, data });
+  };
 
-    // The IntentBuilder already executed the intent and created the transaction
-    // This callback is just for UI updates and cleanup
-    console.log('✅ Intent already executed by IntentBuilder, just updating UI');
+  const addUserMessage = (content: string) => {
+    addMessage({ type: 'user', content });
+  };
+
+  const addSystemMessage = (content: string) => {
+    addMessage({ type: 'system', content });
+  };
+
+  const handleSendMessage = async () => {
+    if (!inputText.trim() || isLoading) return;
+
+    const userInput = inputText.trim();
+    setInputText('');
+    addUserMessage(userInput);
+
+    await processUserInput(userInput);
+  };
+
+  const processUserInput = async (input: string) => {
+    setIsLoading(true);
 
     try {
-      setLoading(true);
+      const lowerInput = input.toLowerCase();
 
-      // Close the modal
-      setShowIntentBuilder(false);
-
-      // Refresh user profile and balances
-      await fetchUserProfile();
-      await refreshBalances();
-
-      // Show success feedback
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-
-      console.log('✅ IntentScreen UI updated after intent creation');
-    } catch (error: any) {
-      console.error('❌ Failed to update UI after intent creation:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleRefresh = async () => {
-    await fetchUserProfile();
-    await refreshBalances();
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-  };
-
-  const getStatusColor = (status: string) => {
-    switch (status.toLowerCase()) {
-      case 'completed':
-      case 'executed':
-        return '#4ADE80';
-      case 'active':
-      case 'pending':
-        return '#F59E0B';
-      case 'failed':
-      case 'cancelled':
-        return '#EF4444';
-      default:
-        return '#8E8E93';
-    }
-  };
-
-  const testProtocolState = async () => {
-    if (!publicKey) return;
-
-    try {
-      console.log('🔍 Testing protocol state...');
-      const [protocolStatePDA] = await intentFiMobile.advancedSDK.intentFi.getProtocolStatePDA();
-      console.log('📍 Protocol State PDA:', protocolStatePDA.toString());
-
-      const protocolStateInfo = await networkService
-        .getConnection()
-        .getAccountInfo(protocolStatePDA);
-      console.log('📊 Protocol State Info:', protocolStateInfo);
-
-      if (protocolStateInfo) {
-        console.log('✅ Protocol state exists');
-        console.log('📦 Data length:', protocolStateInfo.data.length);
-        console.log('👑 Owner:', protocolStateInfo.owner.toString());
+      // Check for swap intent
+      if (
+        lowerInput.includes('swap') ||
+        lowerInput.includes('exchange') ||
+        lowerInput.includes('trade')
+      ) {
+        await handleSwapIntent(input);
+      } else if (swapState.step !== 'idle') {
+        await handleSwapFlow(input);
       } else {
-        console.log('❌ Protocol state does not exist');
+        // General help
+        addBotMessage(
+          `I can help you swap tokens! Here are some things you can say:\n\n• "Swap 1 SOL to USDC"\n• "Exchange 100 MELANIA for SOL"\n• "I want to swap tokens"\n\nTry one of these or tell me what tokens you'd like to swap!`
+        );
       }
     } catch (error) {
-      console.error('❌ Error checking protocol state:', error);
+      console.error('❌ Error processing input:', error);
+      addBotMessage('❌ Sorry, I encountered an error. Please try again.');
+    } finally {
+      setIsLoading(false);
     }
   };
+
+  const handleSwapIntent = async (input: string) => {
+    // Parse swap intent from natural language
+    const swapPattern = /swap|exchange|trade/i;
+    const amountPattern = /(\d+(?:\.\d+)?)\s*([a-zA-Z]+)/gi;
+    const toPattern = /(?:to|for|into)\s+([a-zA-Z]+)/i;
+
+    if (!swapPattern.test(input)) {
+      addBotMessage('I can help you swap tokens! What would you like to swap?');
+      return;
+    }
+
+    // Try to extract amount and tokens
+    const matches = [...input.matchAll(amountPattern)];
+    const toMatch = input.match(toPattern);
+
+    if (matches.length > 0) {
+      const amount = matches[0][1];
+      const fromSymbol = matches[0][2].toUpperCase();
+      const toSymbol = toMatch ? toMatch[1].toUpperCase() : null;
+
+      if (toSymbol) {
+        // Complete swap instruction
+        await startSwapWithTokens(fromSymbol, toSymbol, amount);
+      } else {
+        // Partial instruction
+        await startSwapFlow(fromSymbol, amount);
+      }
+    } else {
+      // No specific tokens mentioned
+      await startSwapFlow();
+    }
+  };
+
+  const startSwapWithTokens = async (fromSymbol: string, toSymbol: string, amount: string) => {
+    // Find tokens
+    const fromToken = findToken(fromSymbol);
+    const toToken = findToken(toSymbol);
+
+    if (!fromToken) {
+      addBotMessage(
+        `❌ I couldn't find the token "${fromSymbol}". Let me show you available tokens:`
+      );
+      showAvailableTokens('from');
+      return;
+    }
+
+    if (!toToken) {
+      addBotMessage(
+        `❌ I couldn't find the token "${toSymbol}". Let me show you available tokens:`
+      );
+      showAvailableTokens('to');
+      return;
+    }
+
+    // Validate user balance
+    const userBalance = getUserTokenBalance(fromToken.symbol);
+    const requiredAmount = parseFloat(amount);
+
+    if (!userBalance || userBalance.uiAmount < requiredAmount) {
+      addBotMessage(
+        `❌ Insufficient balance!\n\nYou need ${amount} ${fromSymbol} but you only have ${userBalance ? userBalance.uiAmount.toFixed(4) : '0'} ${fromSymbol}.\n\nPlease enter a smaller amount or choose a different token.`
+      );
+      return;
+    }
+
+    // Get quote and confirm
+    await getQuoteAndConfirm(fromToken, toToken, amount);
+  };
+
+  const startSwapFlow = async (fromSymbol?: string, amount?: string) => {
+    if (fromSymbol) {
+      const fromToken = findToken(fromSymbol);
+      if (fromToken) {
+        setSwapState({ step: 'selecting_to', fromToken, amount });
+        addBotMessage(
+          `Great! You want to swap ${amount || 'some'} ${fromSymbol}. What token would you like to receive?`
+        );
+        showAvailableTokens('to');
+      } else {
+        addBotMessage(`❌ I couldn't find "${fromSymbol}". Let me show you your available tokens:`);
+        showUserTokens();
+      }
+    } else {
+      setSwapState({ step: 'selecting_from' });
+      addBotMessage("Perfect! Let's start a swap. Which token would you like to swap FROM?");
+      showUserTokens();
+    }
+  };
+
+  const handleSwapFlow = async (input: string) => {
+    const { step } = swapState;
+
+    switch (step) {
+      case 'selecting_from':
+        await handleFromTokenSelection(input);
+        break;
+      case 'selecting_to':
+        await handleToTokenSelection(input);
+        break;
+      case 'entering_amount':
+        await handleAmountEntry(input);
+        break;
+      case 'confirming':
+        await handleConfirmation(input);
+        break;
+    }
+  };
+
+  const handleFromTokenSelection = async (input: string) => {
+    const token = findToken(input.toUpperCase());
+    if (!token) {
+      addBotMessage(`❌ I couldn't find "${input}". Please choose from your available tokens:`);
+      showUserTokens();
+      return;
+    }
+
+    const userBalance = getUserTokenBalance(token.symbol);
+    if (!userBalance || userBalance.uiAmount === 0) {
+      addBotMessage(`❌ You don't have any ${token.symbol}. Please choose a token you own:`);
+      showUserTokens();
+      return;
+    }
+
+    setSwapState((prev) => ({ ...prev, step: 'selecting_to', fromToken: token }));
+    addBotMessage(`Great! You selected ${token.symbol}. What token would you like to receive?`);
+    showAvailableTokens('to');
+  };
+
+  const handleToTokenSelection = async (input: string) => {
+    const token = findToken(input.toUpperCase());
+    if (!token) {
+      addBotMessage(`❌ I couldn't find "${input}". Please choose from available tokens:`);
+      showAvailableTokens('to');
+      return;
+    }
+
+    if (token.symbol === swapState.fromToken?.symbol) {
+      addBotMessage(
+        `❌ You can't swap ${token.symbol} for the same token. Please choose a different token:`
+      );
+      showAvailableTokens('to');
+      return;
+    }
+
+    setSwapState((prev) => ({ ...prev, step: 'entering_amount', toToken: token }));
+
+    const userBalance = getUserTokenBalance(swapState.fromToken!.symbol);
+    addBotMessage(
+      `Perfect! You want to swap ${swapState.fromToken!.symbol} → ${token.symbol}\n\nYou have ${userBalance?.uiAmount.toFixed(4)} ${swapState.fromToken!.symbol} available.\n\nHow much ${swapState.fromToken!.symbol} would you like to swap?`
+    );
+  };
+
+  const handleAmountEntry = async (input: string) => {
+    const amount = parseFloat(input);
+
+    if (isNaN(amount) || amount <= 0) {
+      addBotMessage(`❌ Please enter a valid amount (e.g., "1.5" or "100")`);
+      return;
+    }
+
+    const userBalance = getUserTokenBalance(swapState.fromToken!.symbol);
+    if (!userBalance || userBalance.uiAmount < amount) {
+      addBotMessage(
+        `❌ Insufficient balance! You only have ${userBalance?.uiAmount.toFixed(4)} ${swapState.fromToken!.symbol}.\n\nPlease enter a smaller amount:`
+      );
+      return;
+    }
+
+    await getQuoteAndConfirm(swapState.fromToken!, swapState.toToken!, input);
+  };
+
+  const getQuoteAndConfirm = async (
+    fromToken: IntentToken,
+    toToken: IntentToken,
+    amount: string
+  ) => {
+    try {
+      addBotMessage(
+        `🔄 Getting the best quote for ${amount} ${fromToken.symbol} → ${toToken.symbol}...`
+      );
+
+      const userOrgId = intentApiService.getUserOrganizationId();
+      if (!userOrgId) {
+        addBotMessage('❌ Authentication error. Please log in again.');
+        return;
+      }
+
+      // Convert amount to base units
+      const amountInBaseUnits = (parseFloat(amount) * Math.pow(10, fromToken.decimals)).toString();
+
+      const quoteRequest = {
+        amountIn: amountInBaseUnits,
+        fromToken: fromToken.contract,
+        toToken:
+          toToken.contract === '0x0000000000000000000000000000000000000000'
+            ? '0x0000000000000000000000000000000000000000'
+            : toToken.contract,
+        fromChain: 'solana',
+        toChain: 'solana',
+        slippageBps: 100, // 1% slippage
+        userOrganizationId: userOrgId,
+      };
+
+      const quoteResponse = await intentApiService.getQuote(quoteRequest);
+
+      if (!quoteResponse.success || !quoteResponse.quote.length) {
+        addBotMessage(
+          '❌ Unable to get a quote for this swap. Please try different tokens or amounts.'
+        );
+        return;
+      }
+
+      const quote = quoteResponse.quote[0];
+
+      setSwapState((prev) => ({
+        ...prev,
+        step: 'confirming',
+        amount,
+        quote,
+        fromToken,
+        toToken,
+      }));
+
+      const priceImpact =
+        quote.priceImpact > 0 ? ` (${quote.priceImpact.toFixed(2)}% price impact)` : '';
+
+      addBotMessage(
+        `✅ Quote received!\n\n📊 **Swap Details:**\n• From: ${amount} ${fromToken.symbol}\n• To: ~${quote.expectedAmountOut.toFixed(6)} ${toToken.symbol}\n• Rate: 1 ${fromToken.symbol} = ${quote.price.toFixed(6)} ${toToken.symbol}${priceImpact}\n• Route: ${quote.meta.title}\n• ETA: ${quote.clientEta}\n\n💡 This is the best available rate!\n\n**Ready to execute this swap?**`,
+        { quote, fromToken, toToken, amount }
+      );
+    } catch (error) {
+      console.error('❌ Failed to get quote:', error);
+      addBotMessage('❌ Failed to get quote. Please try again.');
+    }
+  };
+
+  const handleConfirmation = async (input: string) => {
+    const lowerInput = input.toLowerCase();
+
+    if (
+      lowerInput.includes('yes') ||
+      lowerInput.includes('confirm') ||
+      lowerInput.includes('execute') ||
+      lowerInput.includes('swap')
+    ) {
+      await executeSwap();
+    } else if (lowerInput.includes('no') || lowerInput.includes('cancel')) {
+      setSwapState({ step: 'idle' });
+      addBotMessage('❌ Swap cancelled. What else can I help you with?');
+    } else {
+      addBotMessage('Please type "yes" to confirm the swap or "no" to cancel.');
+    }
+  };
+
+  const executeSwap = async () => {
+    try {
+      setSwapState((prev) => ({ ...prev, step: 'executing' }));
+      addBotMessage('🚀 Executing your swap...');
+
+      const userOrgId = intentApiService.getUserOrganizationId();
+      const portfolioData = await turnkeySolanaService.getPortfolioData();
+
+      if (!userOrgId || !portfolioData.wallets.length) {
+        addBotMessage('❌ Authentication or wallet error. Please try again.');
+        return;
+      }
+
+      const userAddress = portfolioData.wallets[0].address;
+
+      const swapRequest = {
+        quote: swapState.quote!,
+        originAddress: userAddress,
+        destinationAddress: userAddress,
+        userOrganizationId: userOrgId,
+      };
+
+      const swapResponse = await intentApiService.executeSwap(swapRequest);
+
+      if (swapResponse.success && swapResponse.result.success) {
+        addBotMessage(
+          `🎉 **Swap Executed Successfully!**\n\n✅ Transaction: ${swapResponse.result.signature.slice(0, 8)}...${swapResponse.result.signature.slice(-8)}\n\n🔍 You can track your transaction on Solscan.\n\n💡 Your tokens should arrive shortly!`,
+          {
+            signature: swapResponse.result.signature,
+            explorerUrl: swapResponse.result.explorerUrl,
+          }
+        );
+
+        // Reset state
+        setSwapState({ step: 'idle' });
+
+        // Refresh user tokens
+        setTimeout(async () => {
+          try {
+            const newPortfolioData = await turnkeySolanaService.getPortfolioData();
+            setUserTokens(newPortfolioData.allTokenBalances);
+            addSystemMessage('💫 Portfolio refreshed with latest balances');
+          } catch (error) {
+            console.log('Failed to refresh portfolio:', error);
+          }
+        }, 3000);
+      } else {
+        addBotMessage('❌ Swap failed. Please try again or contact support.');
+        setSwapState({ step: 'idle' });
+      }
+    } catch (error) {
+      console.error('❌ Failed to execute swap:', error);
+      addBotMessage('❌ Failed to execute swap. Please try again.');
+      setSwapState({ step: 'idle' });
+    }
+  };
+
+  const findToken = (symbol: string): IntentToken | undefined => {
+    // Check available tokens first
+    const token = availableTokens.find((t) => t.symbol.toUpperCase() === symbol.toUpperCase());
+    if (token) return token;
+
+    // Check for SOL
+    if (symbol.toUpperCase() === 'SOL') {
+      return intentApiService.getSolToken() as IntentToken;
+    }
+
+    return undefined;
+  };
+
+  const getUserTokenBalance = (symbol: string): TurnkeyTokenBalance | undefined => {
+    return userTokens.find((t) => t.symbol.toUpperCase() === symbol.toUpperCase());
+  };
+
+  const showUserTokens = () => {
+    if (userTokens.length === 0) {
+      addBotMessage("❌ You don't have any tokens in your wallet. Please fund your wallet first.");
+      return;
+    }
+
+    const tokenList = userTokens
+      .filter((token) => token.uiAmount > 0)
+      .map(
+        (token) =>
+          `• ${token.symbol}: ${token.uiAmount.toFixed(4)} (≈$${(token.value || 0).toFixed(2)})`
+      )
+      .join('\n');
+
+    addBotMessage(
+      `💰 **Your Available Tokens:**\n\n${tokenList}\n\nJust type the symbol of the token you want to swap (e.g., "SOL" or "USDC")`
+    );
+  };
+
+  const showAvailableTokens = (type: 'from' | 'to') => {
+    const tokenList = availableTokens
+      .slice(0, 10) // Show top 10
+      .map((token) => `• ${token.symbol}: ${token.name}`)
+      .join('\n');
+
+    addBotMessage(
+      `🪙 **Available Tokens ${type === 'to' ? 'to Receive' : 'to Swap'}:**\n\n${tokenList}\n• SOL: Solana\n\nJust type the symbol (e.g., "MELANIA" or "SOL")`
+    );
+  };
+
+  const handleQuickAction = (action: string) => {
+    setInputText(action);
+    handleSendMessage();
+  };
+
+  const renderMessage = (message: ChatMessage) => {
+    const isUser = message.type === 'user';
+    const isSystem = message.type === 'system';
+
+    return (
+      <Animated.View
+        key={message.id}
+        entering={FadeInLeft.duration(300)}
+        className={`mb-4 flex-row ${isUser ? 'justify-end' : 'justify-start'}`}>
+        {!isUser && !isSystem && (
+          <View className="mr-3 h-8 w-8 items-center justify-center rounded-full bg-primary">
+            <Ionicons name="flash" size={16} color="white" />
+          </View>
+        )}
+
+        <View
+          className={`max-w-[80%] rounded-2xl px-4 py-3 ${
+            isUser
+              ? 'bg-primary'
+              : isSystem
+                ? 'border border-gray-500 bg-gray-600/50'
+                : 'border border-dark-border bg-dark-card'
+          }`}>
+          <Text className={`${isUser ? 'text-white' : isSystem ? 'text-gray-300' : 'text-white'}`}>
+            {message.content}
+          </Text>
+
+          {/* Special rendering for quotes and transactions */}
+          {message.data?.signature && (
+            <TouchableOpacity
+              onPress={() => {
+                if (message.data.explorerUrl) {
+                  Linking.openURL(message.data.explorerUrl);
+                }
+              }}
+              className="mt-3 rounded-lg bg-primary/20 p-3">
+              <Text className="text-center font-medium text-primary">View on Solscan 🔍</Text>
+            </TouchableOpacity>
+          )}
+
+          <Text className={`mt-2 text-xs ${isUser ? 'text-white/70' : 'text-gray-500'}`}>
+            {message.timestamp.toLocaleTimeString()}
+          </Text>
+        </View>
+
+        {isUser && (
+          <View className="ml-3 h-8 w-8 items-center justify-center rounded-full bg-gray-600">
+            <Ionicons name="person" size={16} color="white" />
+          </View>
+        )}
+      </Animated.View>
+    );
+  };
+
+  if (!isAuthenticated || !user) {
+    return (
+      <SafeAreaView className="flex-1 bg-dark-bg">
+        <View className="flex-1 items-center justify-center p-6">
+          <Ionicons name="lock-closed" size={48} color="#8E8E93" />
+          <Text className="mt-4 text-lg text-white">Authentication Required</Text>
+          <Text className="mt-2 text-center text-sm text-gray-400">
+            Please log in to use the Intent Chat
+          </Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView className="flex-1 bg-dark-bg">
-      {/* Header */}
-      <Animated.View
-        entering={FadeInUp.duration(600)}
-        className="flex-row items-center justify-between p-4">
-        <View>
-          <Text className="text-2xl font-bold text-white">Create Intent</Text>
-          <Text className="text-sm text-gray-400">
-            📡 {networkService.getCurrentNetwork().toUpperCase()} •{' '}
-            {isInitialized ? 'Connected' : 'Connecting...'}
-          </Text>
-        </View>
-        <TouchableOpacity className="p-2">
-          <Ionicons name="help-circle-outline" size={24} color="#8E8E93" />
-        </TouchableOpacity>
-      </Animated.View>
-
-      {/* Connection Status */}
-      {!connected && (
-        <Animated.View entering={FadeInUp.duration(600).delay(50)} className="mx-4 mb-4">
-          <View className="rounded-xl border border-yellow-500/30 bg-yellow-500/10 p-4">
-            <View className="flex-row items-center">
-              <Ionicons name="warning" size={20} color="#F59E0B" />
-              <Text className="ml-2 font-semibold text-yellow-400">Wallet Not Connected</Text>
-            </View>
-            <Text className="mt-2 text-sm text-yellow-300">
-              Please connect your wallet to use IntentFI features
+      <KeyboardAvoidingView
+        className="flex-1"
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+        {/* Header */}
+        <Animated.View
+          entering={FadeInUp.duration(600)}
+          className="flex-row items-center justify-between border-b border-dark-border p-4">
+          <View>
+            <Text className="text-2xl font-bold text-white">Intent Chat</Text>
+            <Text className="text-sm text-gray-400">
+              💬 AI-powered token swaps • Solana Mainnet
             </Text>
           </View>
+          <TouchableOpacity
+            onPress={() => {
+              setMessages([]);
+              setSwapState({ step: 'idle' });
+              initializeChat();
+            }}
+            className="p-2">
+            <Ionicons name="refresh" size={24} color="#8E8E93" />
+          </TouchableOpacity>
         </Animated.View>
-      )}
 
-      {/* User Account Status */}
-      {isInitialized && publicKey && connected && (
-        <Animated.View entering={FadeInUp.duration(600).delay(50)} className="mx-4 mb-4">
-          <View className="rounded-xl border border-dark-border bg-dark-card p-4">
-            <View className="flex-row items-center justify-between">
-              <View>
-                <Text className="font-semibold text-white">User Account</Text>
-                <Text className="font-mono text-xs text-gray-400">
-                  {publicKey.toString().slice(0, 20)}...
-                </Text>
-                <Text className="font-mono text-xs text-gray-400">
-                  Balance: {balance.toFixed(4)} SOL
-                </Text>
+        {/* Chat Messages */}
+        <ScrollView
+          ref={scrollViewRef}
+          className="flex-1 px-4 py-4"
+          showsVerticalScrollIndicator={false}>
+          {messages.map(renderMessage)}
+
+          {isLoading && (
+            <Animated.View
+              entering={BounceIn.duration(600)}
+              className="mb-4 flex-row justify-start">
+              <View className="mr-3 h-8 w-8 items-center justify-center rounded-full bg-primary">
+                <Ionicons name="flash" size={16} color="white" />
               </View>
-
-              {!userProfile?.account ? (
-                <View className="flex-row gap-2">
-                  <TouchableOpacity
-                    onPress={initializeUserAccount}
-                    disabled={loading}
-                    className="rounded-lg  bg-primary px-4 py-2">
-                    <Text className="text-center font-semibold text-white">
-                      {loading ? 'Initializing...' : 'Initialize IntentFI Account'}
-                    </Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={async () => {
-                      console.log('🔄 Manual refresh triggered...');
-                      await fetchUserProfile();
-                      await refreshBalances();
-                    }}
-                    disabled={loading}
-                    className="rounded-lg bg-gray-600 px-3 py-2">
-                    <Ionicons name="refresh" size={20} color="white" />
-                  </TouchableOpacity>
-                </View>
-              ) : (
-                <View className="items-end">
-                  <Text className="font-semibold text-primary">✓ Active</Text>
-                  <Text className="text-xs text-gray-400">
-                    {userProfile.account.totalIntentsCreated} intents created
-                  </Text>
-                </View>
-              )}
-            </View>
-          </View>
-        </Animated.View>
-      )}
-
-      {/* Tab Navigation */}
-      <Animated.View entering={FadeInUp.duration(600).delay(100)} className="mb-6 px-4">
-        <View className="relative flex-row rounded-2xl border border-dark-border bg-dark-card p-2">
-          {/* Animated Tab Indicator */}
-          <Animated.View
-            style={[animatedTabStyle]}
-            className="absolute left-2 top-2 h-12 w-1/4 rounded-xl bg-primary"
-          />
-
-          {intentTypes.map((type, index) => (
-            <TouchableOpacity
-              key={type.id}
-              onPress={() => handleTabPress(index)}
-              className="z-10 h-12 flex-1 items-center justify-center">
-              <Ionicons
-                name={type.icon as any}
-                size={20}
-                color={selectedTab === index ? '#FFFFFF' : '#8E8E93'}
-              />
-            </TouchableOpacity>
-          ))}
-        </View>
-      </Animated.View>
-
-      <PullToRefresh onRefresh={handleRefresh}>
-        {/* Intent Type Description */}
-        <Animated.View
-          entering={SlideInRight.duration(600).delay(200)}
-          className="mx-4 mb-6 rounded-2xl border border-dark-border bg-dark-card p-6">
-          <View className="mb-3 flex-row items-center">
-            <View className="mr-4 h-12 w-12 items-center justify-center rounded-full bg-primary/20">
-              <Ionicons name={intentTypes[selectedTab].icon as any} size={24} color="#FF4500" />
-            </View>
-            <View className="flex-1">
-              <Text className="text-lg font-semibold text-white">
-                {intentTypes[selectedTab].title} Intent
-              </Text>
-              <Text className="text-gray-400">{intentTypes[selectedTab].description}</Text>
-            </View>
-          </View>
-
-          {selectedTab === 0 && (
-            <View className="mt-4">
-              <Text className="mb-3 text-sm text-gray-400">
-                Contract: 2UPCMZ2LESPx8wU83wdng3Yjhx2yxRLEkEDYDkNUg1jd
-              </Text>
-              <Text className="text-sm text-gray-400">• Simulated swaps for devnet testing</Text>
-              <Text className="text-sm text-gray-400">• Protocol fees applied</Text>
-              <Text className="text-sm text-gray-400">• All transactions are free on devnet</Text>
-            </View>
+              <View className="rounded-2xl border border-dark-border bg-dark-card px-4 py-3">
+                <Text className="text-gray-400">Thinking...</Text>
+              </View>
+            </Animated.View>
           )}
-        </Animated.View>
+        </ScrollView>
 
-        {/* Quick Templates */}
-        {selectedTab === 0 && (
-          <Animated.View entering={SlideInRight.duration(600).delay(300)} className="mb-6 px-4">
-            <Text className="mb-4 text-lg font-semibold text-white">Quick Templates</Text>
+        {/* Quick Actions */}
+        {swapState.step === 'idle' && messages.length > 1 && (
+          <Animated.View entering={FadeInUp.duration(400)} className="px-4 py-2">
             <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              {swapExamples.map((template, index) => (
+              <View className="flex-row space-x-3">
                 <TouchableOpacity
-                  key={index}
-                  onPress={() => handleTemplatePress(template)}
-                  className="mr-4 w-64 rounded-xl border border-dark-border bg-dark-card p-4">
-                  <View className="mb-2 flex-row items-center">
-                    <Text className="mr-2 font-semibold text-primary">{template.from}</Text>
-                    <Ionicons name="arrow-forward" size={16} color="#8E8E93" />
-                    <Text className="ml-2 font-semibold text-primary">{template.to}</Text>
-                  </View>
-                  <Text className="mb-1 text-sm text-gray-400">{template.description}</Text>
-                  <Text className="font-medium text-white">{template.amount}</Text>
+                  onPress={() => handleQuickAction('Swap SOL to USDC')}
+                  className="rounded-full bg-primary/20 px-4 py-2">
+                  <Text className="font-medium text-primary">Swap SOL to USDC</Text>
                 </TouchableOpacity>
-              ))}
+                <TouchableOpacity
+                  onPress={() => handleQuickAction('Show my tokens')}
+                  className="rounded-full bg-primary/20 px-4 py-2">
+                  <Text className="font-medium text-primary">Show my tokens</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => handleQuickAction('Swap MELANIA for SOL')}
+                  className="rounded-full bg-primary/20 px-4 py-2">
+                  <Text className="font-medium text-primary">Swap MELANIA</Text>
+                </TouchableOpacity>
+              </View>
             </ScrollView>
           </Animated.View>
         )}
 
-        {/* Recent Intents */}
-        <Animated.View entering={SlideInRight.duration(600).delay(400)} className="mb-20 px-4">
-          <Text className="mb-4 text-lg font-semibold text-white">
-            Recent Intents ({recentIntents.length + activeIntents.length})
-          </Text>
+        {/* Input Area */}
+        <Animated.View
+          entering={FadeInUp.duration(600).delay(200)}
+          className="flex-row items-center border-t border-dark-border p-4">
+          <View className="flex-1 flex-row items-center rounded-2xl border border-dark-border bg-dark-card px-4 py-3">
+            <TextInput
+              value={inputText}
+              onChangeText={setInputText}
+              placeholder={
+                swapState.step === 'selecting_from'
+                  ? 'Type token symbol (e.g., SOL)...'
+                  : swapState.step === 'selecting_to'
+                    ? 'Type token to receive...'
+                    : swapState.step === 'entering_amount'
+                      ? 'Enter amount...'
+                      : swapState.step === 'confirming'
+                        ? 'Type "yes" to confirm...'
+                        : 'Type your message...'
+              }
+              placeholderTextColor="#8E8E93"
+              className="flex-1 text-white"
+              multiline={false}
+              onSubmitEditing={handleSendMessage}
+              editable={!isLoading}
+            />
+          </View>
 
-          {recentIntents.length === 0 && activeIntents.length === 0 ? (
-            <View className="items-center rounded-xl border border-dark-border bg-dark-card p-6">
-              <Ionicons name="flash-outline" size={48} color="#8E8E93" />
-              <Text className="mt-4 text-center text-gray-400">
-                {!userProfile?.account
-                  ? 'Initialize your account to start creating intents'
-                  : 'No intents created yet. Create your first intent!'}
-              </Text>
-            </View>
-          ) : (
-            <>
-              {/* Show active intents from SolanaProvider first */}
-              {activeIntents
-                .slice()
-                .reverse()
-                .map((intent) => (
-                  <View
-                    key={intent.id}
-                    className="mb-3 flex-row items-center justify-between rounded-xl border border-dark-border bg-dark-card p-4">
-                    <View className="flex-1">
-                      <View className="mb-1 flex-row items-center">
-                        <View
-                          className="mr-3 h-3 w-3 rounded-full"
-                          style={{ backgroundColor: getStatusColor(intent.status) }}
-                        />
-                        <Text className="font-semibold text-white">{intent.type}</Text>
-                        <Text className="ml-2 text-xs text-gray-500">
-                          {intent.status === 'completed' ? 'Blockchain' : 'Processing'}
-                        </Text>
-                      </View>
-                      <Text className="mb-1 text-sm text-gray-400">
-                        {intent.params?.amount || 'N/A'}{' '}
-                        {intent.params?.fromMint === 'So11111111111111111111111111111111111111112'
-                          ? 'SOL'
-                          : 'tokens'}
-                      </Text>
-                      <Text className="text-xs text-gray-500">
-                        {new Date(intent.createdAt).toLocaleString()}
-                      </Text>
-                      {intent.txId &&
-                        intent.txId !== 'pending_signature' &&
-                        intent.status === 'completed' && (
-                          <TouchableOpacity
-                            onPress={() => {
-                              if (intent.txId?.length === 88) {
-                                // Real Solana signature length
-                                Linking.openURL(
-                                  `https://explorer.solana.com/tx/${intent.txId}?cluster=devnet`
-                                );
-                              }
-                            }}
-                            className="mt-1">
-                            <Text className="text-xs text-blue-400 underline">
-                              View on Explorer: {intent.txId?.slice(0, 8)}...
-                              {intent.txId?.slice(-8)}
-                            </Text>
-                          </TouchableOpacity>
-                        )}
-                    </View>
-                    <Text
-                      className="font-semibold"
-                      style={{ color: getStatusColor(intent.status) }}>
-                      {intent.status.toUpperCase()}
-                    </Text>
-                  </View>
-                ))}
-
-              {/* Show IntentFI intents */}
-              {recentIntents.map((intent) => (
-                <View
-                  key={intent.id}
-                  className="mb-3 flex-row items-center justify-between rounded-xl border border-dark-border bg-dark-card p-4">
-                  <View className="flex-1">
-                    <View className="mb-1 flex-row items-center">
-                      <View
-                        className="mr-3 h-3 w-3 rounded-full"
-                        style={{ backgroundColor: getStatusColor(intent.status) }}
-                      />
-                      <Text className="font-semibold text-white">{intent.type}</Text>
-                      <Text className="ml-2 text-xs text-gray-500">IntentFI</Text>
-                    </View>
-                    <Text className="mb-1 text-sm text-gray-400">{intent.description}</Text>
-                    <Text className="text-xs text-gray-500">{intent.timestamp}</Text>
-                  </View>
-                  <Text className="font-semibold" style={{ color: getStatusColor(intent.status) }}>
-                    {intent.value}
-                  </Text>
-                </View>
-              ))}
-            </>
-          )}
+          <TouchableOpacity
+            onPress={handleSendMessage}
+            disabled={!inputText.trim() || isLoading}
+            className={`ml-3 h-12 w-12 items-center justify-center rounded-full ${
+              inputText.trim() && !isLoading ? 'bg-primary' : 'bg-gray-600'
+            }`}>
+            <Ionicons name={isLoading ? 'hourglass' : 'send'} size={20} color="white" />
+          </TouchableOpacity>
         </Animated.View>
-      </PullToRefresh>
-
-      {/* Floating Action Button */}
-      {userProfile?.account && !loading && (
-        <FloatingActionButton onPress={handleFABPress} icon="flash" />
-      )}
-
-      {/* Intent Builder Modal */}
-      <Modal
-        visible={showIntentBuilder}
-        animationType="slide"
-        presentationStyle="fullScreen"
-        transparent={false}
-        statusBarTranslucent={true}
-        onRequestClose={() => {
-          console.log('🚪 Modal onRequestClose called');
-          setShowIntentBuilder(false);
-        }}>
-        <IntentBuilder
-          key={`${builderIntentType}-${showIntentBuilder}`}
-          intentType={builderIntentType}
-          onClose={() => {
-            console.log('🚪 IntentBuilder onClose called');
-            setShowIntentBuilder(false);
-          }}
-          onCreateIntent={handleCreateIntent}
-        />
-      </Modal>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
