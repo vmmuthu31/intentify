@@ -230,7 +230,7 @@ export function PortfolioScreen() {
         <View className="flex-1 items-center justify-center">
           <Ionicons name="wallet" size={48} color="#FF4500" />
           <Text className="mt-4 text-lg text-white">Loading Portfolio...</Text>
-          <Text className="mt-2 text-sm text-gray-400">Fetching data from GoldRush API</Text>
+          <Text className="mt-2 text-sm text-gray-400">Fetching data from Our API</Text>
         </View>
       </SafeAreaView>
     );
@@ -282,7 +282,7 @@ export function PortfolioScreen() {
         <View>
           <Text className="text-2xl font-bold text-white">Portfolio</Text>
           <Text className="text-sm text-gray-400">
-            {wallets.length > 0 ? 'Your Solana Wallet' : 'No Wallets'} • GoldRush API
+            {wallets.length > 0 ? 'Your Solana Wallet' : 'No Wallets'}
           </Text>
         </View>
         <View className="flex-row items-center">
@@ -530,42 +530,6 @@ export function PortfolioScreen() {
               </Animated.View>
             ))
           )}
-        </Animated.View>
-
-        {/* Data Sources */}
-        <Animated.View entering={FadeInUp.duration(600).delay(400)} className="mb-8 px-4">
-          <Text className="mb-4 text-lg font-semibold text-white">Data Sources</Text>
-          <View className="rounded-xl border border-dark-border bg-dark-card p-4">
-            <View className="space-y-3">
-              <View className="flex-row justify-between">
-                <Text className="text-gray-400">Network</Text>
-                <Text className="text-white">Solana Mainnet</Text>
-              </View>
-              <View className="flex-row justify-between">
-                <Text className="text-gray-400">Wallet Data</Text>
-                <Text className="text-white">Turnkey</Text>
-              </View>
-              <View className="flex-row justify-between">
-                <Text className="text-gray-400">Balance & Prices</Text>
-                <Text className="text-white">GoldRush API</Text>
-              </View>
-              <View className="flex-row justify-between">
-                <Text className="text-gray-400">Price Updates</Text>
-                <Text className="text-white">Real-time</Text>
-              </View>
-              {isContractReady && (
-                <View className="flex-row justify-between">
-                  <Text className="text-gray-400">IntentFI Status</Text>
-                  <Text className="text-success">Connected</Text>
-                </View>
-              )}
-              <View className="border-t border-dark-border pt-3">
-                <Text className="text-center text-xs text-gray-500">
-                  Portfolio data powered by GoldRush API with real-time pricing and 24h changes
-                </Text>
-              </View>
-            </View>
-          </View>
         </Animated.View>
       </ScrollView>
     </SafeAreaView>
