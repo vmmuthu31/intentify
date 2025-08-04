@@ -2,7 +2,7 @@
 
 **AI-Powered DeFi Assistant for Solana Mobile**
 
-*Solana Mobile Hackathon 2025 Submission*
+_Solana Mobile Hackathon 2025 Submission_
 
 [![GitHub](https://img.shields.io/badge/GitHub-Repository-blue?logo=github)](https://github.com/vmmuthu31/intentify)
 [![Solana](https://img.shields.io/badge/Built%20on-Solana-purple?logo=solana)](https://solana.com)
@@ -48,42 +48,47 @@
 
 ```mermaid
 graph TB
+    %% Mobile App Layer
     subgraph "Mobile App Layer"
         A[React Native App] --> B[Intent Chat Interface]
         A --> C[Portfolio Dashboard]
         A --> D[Launchpad]
         A --> E[Settings]
     end
-    
+
+    %% AI Processing Layer
     subgraph "AI Processing Layer"
         F[Groq AI Service] --> G[Intent Parser]
         G --> H[Natural Language Processing]
         H --> I[Command Validation]
     end
-    
+
+    %% Blockchain Layer
     subgraph "Blockchain Layer"
         J[Turnkey Wallet Service] --> K[Solana RPC]
         L[Intent API Service] --> M[Jupiter Aggregator]
         N[Token Metadata Service] --> O[Solana Token Registry]
     end
-    
+
+    %% Security Layer
     subgraph "Security Layer"
         P[Biometric Auth] --> Q[Secure Enclave]
         R[Transaction Validation] --> S[Scam Detection]
     end
-    
+
     B --> F
     F --> L
     L --> J
     J --> K
-    
+
     A --> P
     P --> J
-    
-    style A fill:#ff6b6b
-    style F fill:#4ecdc4
-    style J fill:#45b7d1
-    style P fill:#96ceb4
+
+    %% Style section for visibility on both dark and light backgrounds
+    style A fill:#ff6b6b,stroke:#000,stroke-width:1px,color:#000
+    style F fill:#4ecdc4,stroke:#000,stroke-width:1px,color:#000
+    style J fill:#45b7d1,stroke:#000,stroke-width:1px,color:#000
+    style P fill:#96ceb4,stroke:#000,stroke-width:1px,color:#000
 ```
 
 ### Implementation Flow
@@ -101,24 +106,24 @@ sequenceDiagram
     UI->>AI: Parse natural language
     AI->>AI: Extract intent & validate
     AI-->>UI: Parsed intent (tokens, amount)
-    
+
     UI->>API: Request quote
     API->>SOL: Query Jupiter aggregator
     SOL-->>API: Best route & price
     API-->>UI: Quote response
-    
+
     UI->>U: Show quote confirmation
     U->>UI: Confirm swap
-    
+
     UI->>TK: Sign transaction
     TK->>TK: Biometric verification
     TK-->>UI: Signed transaction
-    
+
     UI->>API: Execute swap
     API->>SOL: Submit transaction
     SOL-->>API: Transaction hash
     API-->>UI: Success response
-    
+
     UI->>U: Transaction complete!
 ```
 
@@ -127,6 +132,7 @@ sequenceDiagram
 ## 🛠️ Technical Stack
 
 ### Frontend
+
 - **React Native** with Expo SDK 53
 - **TypeScript** for type safety
 - **NativeWind** for styling (Tailwind CSS)
@@ -134,24 +140,28 @@ sequenceDiagram
 - **Reanimated 3** for smooth animations
 
 ### AI & Natural Language Processing
+
 - **Groq AI** (Llama 3.1) for intent parsing
 - **Custom NLP pipeline** for command understanding
 - **Context-aware conversation** handling
 - **Smart suggestion engine**
 
 ### Blockchain Integration
+
 - **Solana Web3.js** for blockchain interactions
 - **Jupiter Aggregator** for optimal swap routing
 - **SPL Token** support for all Solana tokens
 - **Metaplex** for NFT metadata
 
 ### Wallet & Security
+
 - **Turnkey** for secure wallet infrastructure
 - **Biometric authentication** (Face ID/Touch ID)
 - **Hardware security module** integration
 - **Multi-signature** support
 
 ### Backend Services
+
 - **Intent API** for swap execution
 - **GoldRush API** for portfolio data
 - **Token metadata** caching
@@ -171,17 +181,20 @@ sequenceDiagram
 ### Installation
 
 1. **Clone the repository**
+
    ```bash
    git clone https://github.com/vmmuthu31/intentify.git
    cd intentify
    ```
 
 2. **Install dependencies**
+
    ```bash
    npm install
    ```
 
 3. **Set up environment variables**
+
    ```bash
    cp .env.example .env
    # Add your API keys:
@@ -191,15 +204,17 @@ sequenceDiagram
    ```
 
 4. **Start the development server**
+
    ```bash
    npm start
    ```
 
 5. **Run on device**
+
    ```bash
    # iOS
    npm run ios
-   
+
    # Android
    npm run android
    ```
@@ -219,27 +234,34 @@ eas build --platform android
 ## 💡 How It Works
 
 ### 1. Natural Language Processing
+
 Users can interact with IntentiFi using natural language:
+
 - "Swap 1 SOL to USDC"
 - "Exchange 100 BONK for SOL"
 - "Show my portfolio"
 - "What's the best token to buy?"
 
 ### 2. AI Intent Recognition
+
 The Groq AI service processes user input and:
+
 - Extracts trading intent and parameters
 - Validates token symbols and amounts
 - Checks user balances and permissions
 - Provides smart suggestions
 
 ### 3. Secure Execution
+
 Once intent is confirmed:
+
 - Gets real-time quotes from Jupiter
 - Validates transaction safety
 - Requires biometric confirmation
 - Executes swap atomically
 
 ### 4. Portfolio Management
+
 - Real-time balance tracking
 - AI-powered portfolio analysis
 - Risk assessment and recommendations
@@ -250,6 +272,7 @@ Once intent is confirmed:
 ## 🔐 Security Features
 
 ### Multi-Layer Security
+
 - **Biometric Authentication**: Face ID/Touch ID for all transactions
 - **Hardware Security**: Turnkey's secure enclave integration
 - **Transaction Validation**: AI-powered scam detection
@@ -257,6 +280,7 @@ Once intent is confirmed:
 - **Timeout Protection**: Transaction expiry mechanisms
 
 ### Privacy Protection
+
 - **Local Processing**: Sensitive data never leaves device
 - **Encrypted Storage**: All keys encrypted at rest
 - **Zero-Knowledge**: No personal data stored on servers
@@ -267,12 +291,14 @@ Once intent is confirmed:
 ## 🎨 User Experience
 
 ### Intuitive Design
+
 - **Dark Mode**: Optimized for mobile viewing
 - **Smooth Animations**: 60fps interactions
 - **Voice Commands**: Hands-free operation
 - **Smart Suggestions**: Context-aware recommendations
 
 ### Accessibility
+
 - **Voice Over** support for visually impaired
 - **Large Text** support
 - **High Contrast** mode
@@ -283,16 +309,19 @@ Once intent is confirmed:
 ## 🧪 Testing
 
 ### Unit Tests
+
 ```bash
 npm run test
 ```
 
 ### Integration Tests
+
 ```bash
 npm run test:integration
 ```
 
 ### E2E Tests
+
 ```bash
 npm run test:e2e
 ```
@@ -312,6 +341,7 @@ npm run test:e2e
 ## 🛣️ Roadmap
 
 ### Phase 1 (Current) ✅
+
 - [x] Natural language swap execution
 - [x] AI-powered intent recognition
 - [x] Secure wallet integration
@@ -319,6 +349,7 @@ npm run test:e2e
 - [x] Mobile-optimized UI
 
 ### Phase 2 (Q2 2025)
+
 - [ ] Voice command integration
 - [ ] Advanced DeFi strategies
 - [ ] Cross-chain swaps
@@ -326,6 +357,7 @@ npm run test:e2e
 - [ ] Advanced analytics
 
 ### Phase 3 (Q3 2025)
+
 - [ ] DeFi yield farming
 - [ ] Automated portfolio rebalancing
 - [ ] NFT integration
@@ -339,6 +371,7 @@ npm run test:e2e
 We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
 
 ### Development Setup
+
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
@@ -362,6 +395,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 **Submission Date**: January 2025
 
 ### Key Innovations
+
 1. **First AI-powered DeFi assistant** for Solana Mobile
 2. **Natural language processing** for blockchain interactions
 3. **One-tap execution** of complex DeFi operations
@@ -369,6 +403,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 5. **Seamless mobile-first** user experience
 
 ### Impact
+
 - **Democratizes DeFi**: Makes complex operations accessible to everyone
 - **Reduces Barriers**: No need to understand technical jargon
 - **Increases Security**: AI-powered protection against scams
@@ -380,9 +415,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 📞 Contact
 
 - **GitHub**: [vmmuthu31/intentify](https://github.com/vmmuthu31/intentify)
-- **Email**: team@intentifi.app
-- **Twitter**: [@IntentiFi](https://twitter.com/intentifi)
-- **Discord**: [Join our community](https://discord.gg/intentifi)
+- **Website**: [Site](https://www.intentifi.xyz)
+- **Twitter**: [@IntentiFi](https://x.com/intent_fi)
 
 ---
 
